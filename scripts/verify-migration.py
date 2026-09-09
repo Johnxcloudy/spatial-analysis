@@ -1,4 +1,4 @@
-"""Verify an actual schema-2 project on a new copy, preserving its source tree."""
+"""Verify an actual schema-2/3 project on a new copy, preserving its source tree."""
 from __future__ import annotations
 
 import argparse
@@ -18,14 +18,18 @@ def sha256(path: Path) -> str:
         return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
-def records(path: Path, registry: str) -> dict:
+def records(path: Path) -> dict:
     with closing(sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)) as connection:
+        schema = connection.execute("PRAGMA user_version").fetchone()[0]
+        registry = "vector_datasets" if schema == 2 else "datasets"
         return {
-            "schema": connection.execute("PRAGMA user_version").fetchone()[0],
+            "schema": schema,
             "datasets": connection.execute(f"SELECT dataset_json FROM {registry} ORDER BY dataset_id").fetchall(),
-            "layers": connection.execute("SELECT * FROM map_layers ORDER BY layer_id").fetchall(),
+            "layers": connection.execute("SELECT layer_id,dataset_id,name,visible,opacity,color,category_field,category_colors,display_order FROM map_layers ORDER BY layer_id").fetchall(),
             "metadata": connection.execute("SELECT * FROM project_metadata").fetchall(),
             "tasks": connection.execute("SELECT * FROM tasks ORDER BY task_id").fetchall(),
+            "publications": connection.execute("SELECT * FROM pending_publications ORDER BY task_id").fetchall(),
+            "exports": connection.execute("SELECT * FROM pending_exports ORDER BY task_id").fetchall(),
         }
 
 
@@ -36,8 +40,9 @@ def main() -> None:
     parser.add_argument("--executable")
     args = parser.parse_args()
     source = Path(args.source_project).resolve()
-    before = records(source, "vector_datasets")
-    assert before["schema"] == 2 and before["datasets"], "Supply an existing schema-2 project with vector data."
+    before = records(source)
+    assert before["schema"] in {2, 3} and before["datasets"], "Supply an existing schema-2/3 project with data."
+    backup_pattern = f"project-v{before['schema']}-*.spa"
     datasets = [json.loads(row[0]) for row in before["datasets"]]
     originals = {str(item): sha256(item) for item in [source, *[source.parent / item["relativePath"] for item in datasets]]}
     output = Path(args.output).resolve()
@@ -45,28 +50,31 @@ def main() -> None:
     copied = output / "project"
     shutil.copytree(source.parent, copied)
     destination = copied / source.name
-    previous_backups = set((copied / "backups").glob("project-v2-*.spa"))
+    previous_backups = set((copied / "backups").glob(backup_pattern))
     rpc = Rpc(Path(__file__).resolve().parents[1], output, args.executable)
     report = {"ok": False, "sourceProject": str(source), "copiedProject": str(destination)}
     try:
         opened = rpc.call("project.open", {"path": str(destination)})
-        assert opened["schemaVersion"] == 3
-        after = records(destination, "datasets")
-        assert after["schema"] == 3
-        assert all(after[key] == before[key] for key in ("datasets", "layers", "metadata", "tasks"))
-        backups = set((copied / "backups").glob("project-v2-*.spa")) - previous_backups
+        assert opened["schemaVersion"] == 4
+        after = records(destination)
+        assert after["schema"] == 4
+        assert all(after[key] == before[key] for key in ("datasets", "layers", "metadata", "tasks", "publications", "exports"))
+        with closing(sqlite3.connect(destination)) as connection:
+            assert not connection.execute("PRAGMA foreign_key_check").fetchall()
+            assert connection.execute("SELECT COUNT(*) FROM map_layers WHERE raster_style IS NOT NULL").fetchone()[0] == 0
+        backups = set((copied / "backups").glob(backup_pattern)) - previous_backups
         assert len(backups) == 1
-        assert records(next(iter(backups)), "vector_datasets") == before
+        assert records(next(iter(backups))) == before
         workspace = rpc.call("workspace.get", {"path": str(destination)})
         assert {item["id"] for item in workspace["datasets"]} == {item["id"] for item in datasets}
         for dataset in datasets:
-            page = rpc.call("vector.page", {"path": str(destination), "datasetId": dataset["id"], "offset": 0,
+            page = rpc.call(f"{dataset['kind']}.page", {"path": str(destination), "datasetId": dataset["id"], "offset": 0,
                                            "limit": 200, "sortField": None, "descending": False, "filter": None})
             assert page["total"] == dataset["featureCount"]
             assert sha256(copied / dataset["relativePath"]) == dataset["version"]
         rpc.call("project.close")
         rpc.call("project.open", {"path": str(destination)})
-        assert len(set((copied / "backups").glob("project-v2-*.spa")) - previous_backups) == 1
+        assert len(set((copied / "backups").glob(backup_pattern)) - previous_backups) == 1
         rpc.call("project.close")
         assert all(sha256(Path(name)) == digest for name, digest in originals.items())
         report.update(ok=True, datasetCount=len(datasets), backup=str(next(iter(backups))),

@@ -34,11 +34,11 @@ def rasterio_env_options() -> dict[str, str]:
 
 
 @contextmanager
-def rasterio_environment() -> Iterator[object]:
+def rasterio_environment(**extra_options: object) -> Iterator[object]:
     import rasterio
     from rasterio.env import set_proj_data_search_path
 
-    options = rasterio_env_options()
+    options = {**extra_options, **rasterio_env_options()}
     with rasterio.Env(**options) as environment:
         proj_data = options.get("PROJ_DATA")
         if proj_data:

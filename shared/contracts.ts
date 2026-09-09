@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 3 as const;
+export const PROTOCOL_VERSION = 4 as const;
 
 export interface ViewState {
   center: [number, number];
@@ -11,7 +11,7 @@ export interface Project {
   description: string;
   createdAt: string;
   updatedAt: string;
-  schemaVersion: 3;
+  schemaVersion: 4;
   projectPath: string;
   analysisCrs: string | null;
   displayCrs: string;
@@ -19,7 +19,7 @@ export interface Project {
 }
 
 export interface RuntimeInfo {
-  protocolVersion: 3;
+  protocolVersion: 4;
   engineVersion: string;
   pythonVersion: string;
   packaged: boolean;
@@ -56,6 +56,7 @@ export interface ProbeReport {
   versions: Record<string, string>;
   reportPath: string;
   geopackagePath: string;
+  geotiffPath: string;
   durationMs: number;
 }
 
@@ -81,6 +82,11 @@ export type EngineMethod =
   | "table.export"
   | "table.page"
   | "table.points"
+  | "raster.inspect"
+  | "raster.import"
+  | "raster.export"
+  | "raster.render"
+  | "raster.sample"
   | "task.get"
   | "task.cancel"
   | "layer.update"
@@ -174,7 +180,86 @@ export interface TableDataset extends DatasetCommon {
   cellMetadataLayer: "cell_metadata" | null;
 }
 
-export type Dataset = VectorDataset | TableDataset;
+export interface RasterBand {
+  index: number;
+  dtype: string;
+  description: string | null;
+  unit: string | null;
+  scale: number;
+  offset: number;
+  noData: number | "NaN" | "Infinity" | "-Infinity" | null;
+  colorInterpretation: string;
+  maskFlags: string[];
+  overviews: number[];
+  tags: Record<string, string>;
+  sampleMin: number | null;
+  sampleMax: number | null;
+  sampledPixels: number;
+  validSamplePixels: number;
+}
+
+export interface RasterInfo {
+  width: number;
+  height: number;
+  bandCount: number;
+  transform: [number, number, number, number, number, number];
+  resolution: [number, number];
+  bands: RasterBand[];
+  horizontalUnit: string | null;
+  verticalCrsWkt: string | null;
+  tags: Record<string, string>;
+  tagNamespaces: Record<string, Record<string, string>>;
+}
+
+export interface RasterDataset extends Pick<DatasetCommon,
+  "id" | "version" | "name" | "source" | "relativePath" | "crsWkt" |
+  "crsAuthority" | "bounds" | "boundsWgs84" | "report" | "createdAt"> {
+  kind: "raster";
+  raster: RasterInfo;
+}
+
+export interface RasterInspection {
+  sourcePath: string;
+  driver: "GTiff";
+  crsWkt: string | null;
+  crsAuthority: string | null;
+  bounds: Bounds | null;
+  boundsWgs84: Bounds | null;
+  raster: RasterInfo;
+  warnings: string[];
+}
+
+export interface RasterStyle {
+  mode: "gray" | "rgb";
+  bands: number[];
+  ranges: [number, number][];
+  resampling: "nearest";
+}
+
+export interface RasterRenderResult {
+  datasetId: string;
+  version: string;
+  bbox: Bounds;
+  dataCrs: "EPSG:3857";
+  width: number;
+  height: number;
+  mimeType: "image/png";
+  imageBase64: string;
+  resampling: "nearest";
+}
+
+export interface RasterSampleResult {
+  datasetId: string;
+  version: string;
+  coordinate: [number, number];
+  sourceCoordinate: [number, number];
+  pixel: { row: number; column: number } | null;
+  inside: boolean;
+  bands: { index: number; rawValue: string | null; value: number | null;
+    valid: boolean; reason: string | null }[];
+}
+
+export type Dataset = VectorDataset | TableDataset | RasterDataset;
 
 export interface TableOptions {
   sourcePath: string;
@@ -205,6 +290,7 @@ export interface MapLayer {
   categoryField: string | null;
   categoryColors: Record<string, string>;
   order: number;
+  rasterStyle?: RasterStyle;
 }
 
 export interface Task {

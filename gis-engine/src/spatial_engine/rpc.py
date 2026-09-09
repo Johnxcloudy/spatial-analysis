@@ -30,6 +30,11 @@ ALLOWED_METHODS = {
     "table.export",
     "table.page",
     "table.points",
+    "raster.inspect",
+    "raster.import",
+    "raster.export",
+    "raster.render",
+    "raster.sample",
     "task.get",
     "task.cancel",
     "layer.update",
@@ -76,6 +81,10 @@ class Engine:
             return vectors.inspect_source(values)
         if method == "table.inspect":
             return tables.inspect_table(values)
+        if method == "raster.inspect":
+            require_exact_keys(values, {"sourcePath"})
+            from .rasters import inspect_raster
+            return inspect_raster(values)
         if method == "workspace.get":
             self.projects.active_path(values.get("path"))
             self.tasks.harvest()
@@ -86,11 +95,22 @@ class Engine:
             return self.tasks.start_table_import(values)
         if method == "table.points":
             return self.tasks.start_table_points(values)
-        if method in {"vector.export", "table.export"}:
+        if method == "raster.import":
+            require_exact_keys(values, {"path", "sourcePath"})
+            return self.tasks.start_raster_import(values)
+        if method in {"vector.export", "table.export", "raster.export"}:
             require_exact_keys(values, {"path", "datasetId", "destination"})
             dataset = self.workspace.dataset(values.get("path"), values.get("datasetId"))
             self._require_dataset_kind(dataset, method.split(".")[0])
             return self.tasks.start_export(values)
+        if method in {"raster.render", "raster.sample"}:
+            query_keys = {"bbox", "width", "height", "style"} if method == "raster.render" else {"coordinate"}
+            require_exact_keys(values, {"path", "datasetId", *query_keys})
+            dataset = self.workspace.dataset(values.get("path"), values.get("datasetId"))
+            self._require_dataset_kind(dataset, "raster")
+            from . import rasters
+            query = rasters.render if method == "raster.render" else rasters.sample
+            return query(dataset, self.workspace.managed_path(dataset), values)
         if method == "task.get":
             return self.tasks.get(values)
         if method == "task.cancel":

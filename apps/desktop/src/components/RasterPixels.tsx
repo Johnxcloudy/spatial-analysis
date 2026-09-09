@@ -1,0 +1,8 @@
+import { LoaderCircle, ScanLine, X } from 'lucide-react';
+import type { RasterDataset, RasterSampleResult } from '../../../../shared/contracts';
+
+export function RasterPixels({ dataset, result, loading, enabled, onClear }: { dataset: RasterDataset; result: RasterSampleResult | null; loading: boolean; enabled: boolean; onClear: () => void }) {
+  return <section className="raster-pixels" aria-label="像元信息"><div className="attribute-heading"><h2>{dataset.name}</h2><span>像元信息</span>{loading && <LoaderCircle className="spin" size={14} />}{result && <button className="icon-button" aria-label="清除像元选择" title="清除像元选择" onClick={onClear}><X size={14} /></button>}</div>
+    {result ? <><div className="pixel-location"><span>查询经纬度：{result.coordinate.join(', ')}</span><span>来源坐标：{result.sourceCoordinate.join(', ')}</span>{result.pixel && <span>行 {result.pixel.row} · 列 {result.pixel.column}（从 0 开始）</span>}</div>{result.inside ? <div className="attribute-scroll"><table><thead><tr><th>波段</th><th>原始值</th><th>缩放后值</th><th>单位</th><th>有效</th><th>原因</th></tr></thead><tbody>{result.bands.map((band) => <tr key={band.index}><th>{band.index}</th><td>{band.rawValue ?? 'NULL'}</td><td>{band.value ?? '不可用'}</td><td>{dataset.raster.bands.find((item) => item.index === band.index)?.unit ?? '未知'}</td><td>{band.valid ? '是' : '否'}</td><td>{band.reason ?? '无'}</td></tr>)}</tbody></table></div> : <p className="query-empty">查询位置不在栅格范围内</p>}</> : <div className="query-empty"><ScanLine size={19} /><span>{!dataset.crsWkt ? '来源 CRS 未知，不能按位置查询' : !enabled ? '工作区暂不可用' : loading ? '正在读取像元' : '尚未选择像元'}</span></div>}
+  </section>;
+}

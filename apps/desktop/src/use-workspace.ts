@@ -254,6 +254,25 @@ export function useWorkspace(bridge: DesktopBridge) {
     return bridge.request('table.inspect', { ...options });
   }, [activeProject, bridge]);
 
+  const inspectRaster = useCallback((sourcePath: string) => {
+    activeProject();
+    return bridge.request('raster.inspect', { sourcePath });
+  }, [activeProject, bridge]);
+
+  const importRaster = (sourcePath: string) => run('开始导入栅格', async () => {
+    const current = activeProject();
+    rememberTask(await bridge.request('raster.import', { path: current.projectPath, sourcePath }));
+    setNotice('栅格导入任务已开始');
+  });
+
+  const exportRaster = (datasetId: string, name: string) => run('导出 GeoTIFF', async () => {
+    const current = activeProject();
+    const destination = await bridge.chooseRasterExport(name);
+    if (!destination) return;
+    rememberTask(await bridge.request('raster.export', { path: current.projectPath, datasetId, destination }));
+    setNotice('GeoTIFF 导出任务已开始');
+  });
+
   const importTable = (options: TableOptions) => run('开始导入表格', async () => {
     const current = activeProject();
     rememberTask(await bridge.request('table.import', { path: current.projectPath, ...options }));
@@ -298,7 +317,7 @@ export function useWorkspace(bridge: DesktopBridge) {
           timer = setTimeout(poll, 700);
         }
         else {
-          setNotice(next.status === 'completed' ? next.kind === 'import' ? '数据已导入' : next.kind === 'points' ? '点数据已生成' : 'GeoPackage 已导出' : next.error || (next.status === 'cancelled' ? '任务已取消' : '任务未完成'));
+          setNotice(next.status === 'completed' ? next.kind === 'import' ? '数据已导入' : next.kind === 'points' ? '点数据已生成' : '数据已导出' : next.error || (next.status === 'cancelled' ? '任务已取消' : '任务未完成'));
           rememberTask(next);
           await loadWorkspace(project, token, next.status === 'completed' && next.kind !== 'export' ? next.datasetId : null);
         }
@@ -314,7 +333,7 @@ export function useWorkspace(bridge: DesktopBridge) {
     await loadWorkspace(current, generation.current);
   });
 
-  const updateLayer = (layerId: string, changes: Partial<Pick<MapLayer, 'name' | 'visible' | 'opacity' | 'color' | 'categoryField' | 'categoryColors'>>) => run('保存图层设置', async () => {
+  const updateLayer = (layerId: string, changes: Partial<Pick<MapLayer, 'name' | 'visible' | 'opacity' | 'color' | 'categoryField' | 'categoryColors' | 'rasterStyle'>>) => run('保存图层设置', async () => {
     const current = activeProject();
     const next = await bridge.request('layer.update', { path: current.projectPath, layerId, changes });
     setWorkspace((value) => value ? { ...value, layers: value.layers.map((layer) => layer.id === layerId ? next : layer) } : value);
@@ -333,7 +352,7 @@ export function useWorkspace(bridge: DesktopBridge) {
     await loadWorkspace(current, generation.current);
   });
 
-  return { project, draft, setDraft, setView, sessionId, runtime, workspace, selectedLayerId, selectedTableId, setSelectedLayerId, setSelectedTableId, refreshWorkspace, activeTask, inspectSource, inspectTable, importVector, importTable, generatePoints, exportVector, exportTable, cancelTask, updateLayer, reorderLayers, removeLayer, handleFailure, report, busy, error, notice, dirty, native, needsReopen, newProject, setNewProject, pending, requestAction, resolvePending, create, save, connect, diagnose };
+  return { project, draft, setDraft, setView, sessionId, runtime, workspace, selectedLayerId, selectedTableId, setSelectedLayerId, setSelectedTableId, refreshWorkspace, activeTask, inspectSource, inspectTable, inspectRaster, importVector, importTable, importRaster, generatePoints, exportVector, exportTable, exportRaster, cancelTask, updateLayer, reorderLayers, removeLayer, handleFailure, report, busy, error, notice, dirty, native, needsReopen, newProject, setNewProject, pending, requestAction, resolvePending, create, save, connect, diagnose };
 }
 
 export type WorkspaceState = ReturnType<typeof useWorkspace>;

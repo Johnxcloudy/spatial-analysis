@@ -41,7 +41,7 @@ async fn engine_request(
 async fn smoke_test(app: &AppHandle, directory: &std::path::Path) -> Result<Value, EngineError> {
     let engine = app.state::<EngineManager>();
     let runtime = engine.request(app, "runtime.info", json!({})).await?;
-    if runtime["protocolVersion"] != 3 || runtime["engineVersion"] != "0.3.0" {
+    if runtime["protocolVersion"] != 4 || runtime["engineVersion"] != "0.4.0" {
         return Err(EngineError::local(
             "SMOKE_VERSION_MISMATCH",
             runtime.to_string(),
@@ -52,12 +52,12 @@ async fn smoke_test(app: &AppHandle, directory: &std::path::Path) -> Result<Valu
         .request(
             app,
             "project.create",
-            json!({"directory":project_directory,"name":"Phase 1B 本地验证"}),
+            json!({"directory":project_directory,"name":"Phase 1C 本地验证"}),
         )
         .await?;
     let path = created["projectPath"].clone();
     let saved = engine.request(app, "project.save", json!({
-        "path":path,"name":"Phase 1B 本地验证","description":"Native bridge saved successfully",
+        "path":path,"name":"Phase 1C 本地验证","description":"Native bridge saved successfully",
         "analysisCrs":"EPSG:4547","displayCrs":created["displayCrs"],"viewState":created["viewState"]
     })).await?;
     engine.request(app, "project.close", json!({})).await?;
@@ -224,11 +224,89 @@ async fn smoke_test(app: &AppHandle, directory: &std::path::Path) -> Result<Valu
         "path":path,"datasetId":table_task["datasetId"],"destination":directory.join("table-export.gpkg")
     })).await?;
     let table_export = wait_for_task(app, &engine, &path, table_export).await?;
+    let raster_source = engine
+        .request(
+            app,
+            "raster.inspect",
+            json!({"sourcePath":report["geotiffPath"]}),
+        )
+        .await?;
+    let raster_source_path = report["geotiffPath"]
+        .as_str()
+        .ok_or_else(|| EngineError::local("SMOKE_RASTER_SOURCE", report.to_string()))?;
+    let raster_source_bytes = std::fs::read(raster_source_path)
+        .map_err(|error| EngineError::local("SMOKE_RASTER_SOURCE", error.to_string()))?;
+    let raster_task = engine
+        .request(
+            app,
+            "raster.import",
+            json!({"path":path,"sourcePath":report["geotiffPath"]}),
+        )
+        .await?;
+    let raster_task = wait_for_task(app, &engine, &path, raster_task).await?;
+    let raster_bounds = &raster_source["boundsWgs84"];
+    let bound = |index: usize| {
+        raster_bounds[index]
+            .as_f64()
+            .ok_or_else(|| EngineError::local("SMOKE_RASTER_BOUNDS", raster_source.to_string()))
+    };
+    let longitude = bound(0)? + (bound(2)? - bound(0)?) * 0.25;
+    let latitude = bound(3)? - (bound(3)? - bound(1)?) * 0.25;
+    let raster_sample = engine.request(app, "raster.sample", json!({"path":path,"datasetId":raster_task["datasetId"],"coordinate":[longitude,latitude]})).await?;
+    let mercator_x = 6378137.0 * longitude.to_radians();
+    let mercator_y = 6378137.0
+        * (std::f64::consts::FRAC_PI_4 + latitude.to_radians() / 2.0)
+            .tan()
+            .ln();
+    let raster_image = engine.request(app, "raster.render", json!({
+        "path":path,"datasetId":raster_task["datasetId"],"bbox":[mercator_x-200.0,mercator_y-200.0,mercator_x+200.0,mercator_y+200.0],
+        "width":128,"height":128,"style":{"mode":"gray","bands":[1],"ranges":[[1,4]],"resampling":"nearest"}
+    })).await?;
+    if raster_source["raster"]["width"] != 2
+        || raster_source["raster"]["height"] != 2
+        || raster_sample["inside"] != true
+        || raster_sample["pixel"]["row"] != 0
+        || raster_sample["pixel"]["column"] != 0
+        || raster_sample["bands"][0]["rawValue"] != "1"
+        || raster_sample["bands"][0]["value"] != 1.0
+        || raster_sample["bands"][0]["valid"] != true
+        || raster_image["mimeType"] != "image/png"
+        || raster_image["width"] != 128
+        || !raster_image["imageBase64"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("iVBORw0KGgo"))
+    {
+        return Err(EngineError::local(
+            "SMOKE_RASTER_MISMATCH",
+            json!({"source":raster_source,"sample":raster_sample}).to_string(),
+        ));
+    }
+    let raster_destination = directory.join("raster-export.tif");
+    let raster_export = engine.request(app, "raster.export", json!({"path":path,"datasetId":raster_task["datasetId"],"destination":raster_destination})).await?;
+    let raster_export = wait_for_task(app, &engine, &path, raster_export).await?;
+    let raster_reread = engine
+        .request(
+            app,
+            "raster.inspect",
+            json!({"sourcePath":raster_destination}),
+        )
+        .await?;
+    let raster_export_bytes = std::fs::read(&raster_destination)
+        .map_err(|error| EngineError::local("SMOKE_RASTER_EXPORT", error.to_string()))?;
+    if raster_reread["raster"] != raster_source["raster"]
+        || raster_reread["crsWkt"] != raster_source["crsWkt"]
+        || raster_export_bytes != raster_source_bytes
+    {
+        return Err(EngineError::local(
+            "SMOKE_RASTER_EXPORT_MISMATCH",
+            raster_reread.to_string(),
+        ));
+    }
     let workspace = engine
         .request(app, "workspace.get", json!({"path":path}))
         .await?;
-    if workspace["datasets"].as_array().map(Vec::len) != Some(3)
-        || workspace["layers"].as_array().map(Vec::len) != Some(2)
+    if workspace["datasets"].as_array().map(Vec::len) != Some(4)
+        || workspace["layers"].as_array().map(Vec::len) != Some(3)
     {
         return Err(EngineError::local(
             "SMOKE_DATASETS_MISMATCH",
@@ -253,7 +331,9 @@ async fn smoke_test(app: &AppHandle, directory: &std::path::Path) -> Result<Valu
         json!({"ok":true,"runtime":runtime,"created":created,"reopened":reopened,"diagnostics":report,
             "source":source,"workspace":restored,"attributes":attributes,"viewport":viewport,"exported":exported,
             "tableSource":table_source_info,"tablePage":table_page,"pointPage":point_page,
-            "pointViewport":point_view,"tableExport":table_export}),
+            "pointViewport":point_view,"tableExport":table_export,"rasterSource":raster_source,
+            "rasterSample":raster_sample,"rasterRender":{"width":raster_image["width"],"height":raster_image["height"],"mimeType":raster_image["mimeType"]},
+            "rasterExport":raster_export}),
     )
 }
 

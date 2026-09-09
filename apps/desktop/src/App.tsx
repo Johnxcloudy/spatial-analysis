@@ -7,6 +7,7 @@ import { CreateProject } from './components/CreateProject';
 import { Modal } from './components/Modal';
 import { ImportVector } from './components/ImportVector';
 import { ImportTable } from './components/ImportTable';
+import { ImportRaster } from './components/ImportRaster';
 import { LayerPanel } from './components/LayerPanel';
 import { TaskStrip } from './components/TaskStrip';
 import { VectorWorkspace } from './components/VectorWorkspace';
@@ -48,6 +49,7 @@ function DiagnosticReport({ report }: { report: ProbeReport | null }) {
     <div className="report-footer"><span>合成样本验证，不代表实际测绘精度。</span><span>{formatNumber(report.durationMs)} ms</span></div>
     <div className="file-location"><span>诊断报告</span><code>{report.reportPath}</code></div>
     <div className="file-location"><span>GeoPackage</span><code>{report.geopackagePath}</code></div>
+    <div className="file-location"><span>GeoTIFF</span><code>{report.geotiffPath}</code></div>
   </>;
 }
 
@@ -57,6 +59,7 @@ export default function App({ bridge = desktop }: { bridge?: DesktopBridge }) {
   const [sideTab, setSideTab] = useState<'layers' | 'project'>('layers');
   const [importing, setImporting] = useState(false);
   const [importingTable, setImportingTable] = useState(false);
+  const [importingRaster, setImportingRaster] = useState(false);
   const [fitRequest, setFitRequest] = useState<(FitRequest & { sessionId: number }) | null>(null);
   const fit = useCallback((bounds: [number, number, number, number]) => {
     setTab('map');
@@ -76,12 +79,13 @@ export default function App({ bridge = desktop }: { bridge?: DesktopBridge }) {
     <div className="toolbar" aria-label="项目工具栏">
       <div className="toolbar-group"><button className="button" disabled={!ready || locked} onClick={() => state.requestAction('new')}><FilePlus2 size={16} />新建项目</button><button className="button" disabled={!ready || locked} onClick={() => state.requestAction('open')}><FolderOpen size={16} />打开项目</button><span className="toolbar-divider" /><IconButton label="保存项目" disabled={!ready || !state.project || !state.dirty || state.needsReopen || locked} onClick={() => void state.save()}><Save size={18} /></IconButton><IconButton label="关闭项目" disabled={!ready || !state.project || locked} onClick={() => state.requestAction('close')}><X size={18} /></IconButton><span className="toolbar-divider" /><button className="button primary" disabled={!ready || !state.project || state.needsReopen || locked || !!state.activeTask} onClick={() => setImporting(true)}><FileUp size={16} />导入数据</button><IconButton label="刷新工作区" disabled={!ready || !state.project || state.needsReopen || locked} onClick={() => void state.refreshWorkspace()}><RefreshCw size={16} /></IconButton></div>
       <button className="button" disabled={!ready || !state.project || state.needsReopen || locked || !!state.activeTask} onClick={() => setImportingTable(true)}><FileSpreadsheet size={16} />导入表格</button>
+      <button className="button" disabled={!ready || !state.project || state.needsReopen || locked || !!state.activeTask} onClick={() => setImportingRaster(true)}><Layers3 size={16} />导入栅格</button>
       <span className="toolbar-context">{state.workspace ? `${state.workspace.datasets.length} 个数据集 · ${state.workspace.layers.length} 个图层` : '本地工作区'}</span>
     </div>
 
     {!state.native && <div className="environment-banner" role="status"><Server size={17} /><span>浏览器模式下本地引擎不可用。项目存取和 GIS 验证需在桌面应用中运行。</span></div>}
     {state.needsReopen && <div className="environment-banner" role="status"><AlertCircle size={17} /><span>引擎会话已中断，当前项目需要重新打开。编辑内容仍保留在表单中。</span></div>}
-    {state.error && !state.newProject && !state.pending && !importing && !importingTable && <div className="error-banner" role="alert"><AlertCircle size={18} /><div><strong>{state.error.message}</strong>{state.error.data?.detail && <p>{state.error.data.detail}</p>}<span className="error-code">{state.error.data?.kind ?? 'ENGINE_ERROR'} · {state.error.code}</span></div></div>}
+    {state.error && !state.newProject && !state.pending && !importing && !importingTable && !importingRaster && <div className="error-banner" role="alert"><AlertCircle size={18} /><div><strong>{state.error.message}</strong>{state.error.data?.detail && <p>{state.error.data.detail}</p>}<span className="error-code">{state.error.data?.kind ?? 'ENGINE_ERROR'} · {state.error.code}</span></div></div>}
 
     <div className="workbench">
       <aside className="project-panel" aria-label="图层与项目">
@@ -113,10 +117,11 @@ export default function App({ bridge = desktop }: { bridge?: DesktopBridge }) {
       </main>
     </div>
 
-    <footer className="statusbar"><span className="status-message" role="status" aria-live="polite">{state.busy ? <><LoaderCircle className="spin" size={13} />{state.busy}</> : <><span className={`status-dot ${state.runtime ? 'online' : ''}`} />{state.notice || (state.runtime ? '就绪' : state.native ? '等待引擎连接' : '本地引擎不可用')}</>}</span><span>分析 CRS · {state.draft?.analysisCrs || '未指定'}</span><span className="version-label">0.3.0</span></footer>
+    <footer className="statusbar"><span className="status-message" role="status" aria-live="polite">{state.busy ? <><LoaderCircle className="spin" size={13} />{state.busy}</> : <><span className={`status-dot ${state.runtime ? 'online' : ''}`} />{state.notice || (state.runtime ? '就绪' : state.native ? '等待引擎连接' : '本地引擎不可用')}</>}</span><span>分析 CRS · {state.draft?.analysisCrs || '未指定'}</span><span className="version-label">0.4.0</span></footer>
 
     {importing && <ImportVector bridge={bridge} state={state} onClose={() => setImporting(false)} />}
     {importingTable && <ImportTable key={state.sessionId} bridge={bridge} state={state} onClose={() => setImportingTable(false)} />}
+    {importingRaster && <ImportRaster key={state.sessionId} bridge={bridge} state={state} onClose={() => setImportingRaster(false)} />}
     {state.newProject && <CreateProject bridge={bridge} busy={locked} error={state.error} onCancel={() => state.setNewProject(false)} onCreate={state.create} />}
     {state.pending && <Modal title="项目有未保存的更改" onCancel={() => void state.resolvePending('cancel')} busy={locked}><p className="modal-description">{state.project?.name}</p>{state.needsReopen && <p className="modal-description">引擎会话已中断，当前更改无法保存。</p>}{state.error && <div className="inline-error" role="alert">{state.error.message}</div>}<div className="modal-actions unsaved-actions"><button className="button" disabled={locked} onClick={() => void state.resolvePending('cancel')}>取消</button><button className="button" disabled={locked} onClick={() => void state.resolvePending('discard')}>放弃更改</button><button className="button primary" disabled={locked || state.needsReopen} onClick={() => void state.resolvePending('save')}>{locked ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />}保存并继续</button></div></Modal>}
   </div>;

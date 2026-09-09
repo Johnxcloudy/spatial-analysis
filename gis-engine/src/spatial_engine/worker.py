@@ -67,7 +67,8 @@ def _read_request(path: Path) -> dict[str, Any]:
         "protocolVersion", "taskId", "kind", "payload", "workDir", "publishPath"
     }:
         raise DomainError("Worker request shape is invalid", kind="invalid_worker_request")
-    if request["protocolVersion"] != 2 or request["kind"] not in {"import", "export", "table_import", "points"}:
+    kinds = {"import", "export", "table_import", "points", "raster_import", "raster_export"}
+    if request["protocolVersion"] != 3 or request["kind"] not in kinds:
         raise DomainError("Worker request version or kind is invalid", kind="invalid_worker_request")
     if not isinstance(request["taskId"], str):
         raise DomainError("Worker task id is invalid", kind="invalid_worker_request")
@@ -81,9 +82,10 @@ def _read_request(path: Path) -> dict[str, Any]:
     if work_dir is None or work_dir != path.parent.resolve(strict=False) or work_dir.name != request["taskId"]:
         raise DomainError("Worker directory is invalid", kind="invalid_worker_request")
     publish_path = request["publishPath"]
-    if request["kind"] != "export" and publish_path is not None:
+    export_kinds = {"export", "raster_export"}
+    if request["kind"] not in export_kinds and publish_path is not None:
         raise DomainError("Dataset publication path must be null", kind="invalid_worker_request")
-    if request["kind"] == "export":
+    if request["kind"] in export_kinds:
         if not isinstance(publish_path, str):
             raise DomainError("Export publication path is invalid", kind="invalid_worker_request")
         publication = Path(publish_path).resolve(strict=False)
@@ -101,16 +103,21 @@ def _finite_float(value: str) -> float:
 
 
 def _validate_result(kind: str, result: Any, work_dir: Path) -> dict[str, Any]:
-    expected = {"artifactPath"} if kind == "export" else {"dataset", "artifactPath"}
+    export_kinds = {"export", "raster_export"}
+    expected = {"artifactPath"} if kind in export_kinds else {"dataset", "artifactPath"}
     if not isinstance(result, dict) or set(result) != expected:
-        raise DomainError("Vector operation returned an invalid result", kind="invalid_worker_result")
+        raise DomainError("GIS operation returned an invalid result", kind="invalid_worker_result")
     artifact_path = result.get("artifactPath")
-    expected_name = "export.gpkg" if kind == "export" else "snapshot.gpkg"
+    expected_name = {
+        "raster_import": "snapshot.tif",
+        "raster_export": "export.tif",
+        "export": "export.gpkg",
+    }.get(kind, "snapshot.gpkg")
     expected_path = (work_dir / expected_name).resolve(strict=False)
     if not isinstance(artifact_path, str) or Path(artifact_path).resolve(strict=False) != expected_path:
-        raise DomainError("Vector operation returned an invalid artifact path", kind="invalid_worker_result")
+        raise DomainError("GIS operation returned an invalid artifact path", kind="invalid_worker_result")
     if not expected_path.is_file():
-        raise DomainError("Vector operation did not create its artifact", kind="invalid_worker_result")
+        raise DomainError("GIS operation did not create its artifact", kind="invalid_worker_result")
     return result
 
 
@@ -176,6 +183,10 @@ def run_worker(request_path: Path) -> int:
             from . import vectors
 
             operation = vectors.import_vector if request["kind"] == "import" else vectors.export_vector
+        elif request["kind"] in {"raster_import", "raster_export"}:
+            from . import rasters
+
+            operation = rasters.import_raster if request["kind"] == "raster_import" else rasters.export_raster
         else:
             from . import tables
 
@@ -184,7 +195,7 @@ def run_worker(request_path: Path) -> int:
         if cancelled():
             raise DomainError("Task was cancelled", kind="task_cancelled")
         validated = _validate_result(request["kind"], result, work_dir)
-        if request["kind"] == "export":
+        if request["kind"] in {"export", "raster_export"}:
             publication_path = Path(request["publishPath"]).resolve(strict=False)
             artifact_size, artifact_digest = _copy_export_for_publication(
                 Path(validated["artifactPath"]), publication_path,

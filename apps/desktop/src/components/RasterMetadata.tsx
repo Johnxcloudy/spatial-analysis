@@ -1,0 +1,11 @@
+import { ChevronDown } from 'lucide-react';
+import type { RasterInfo } from '../../../../shared/contracts';
+
+export function RasterMetadata({ raster }: { raster: RasterInfo }) {
+  return <div className="raster-metadata">
+    <dl className="compact-metadata"><div><dt>像元尺寸</dt><dd>{raster.width.toLocaleString('zh-CN')} × {raster.height.toLocaleString('zh-CN')}</dd></div><div><dt>波段数</dt><dd>{raster.bandCount}</dd></div><div><dt>分辨率</dt><dd>{raster.resolution.join(' × ')} {raster.horizontalUnit ?? '单位未知'}</dd></div><div><dt>仿射变换</dt><dd><code>{raster.transform.join(', ')}</code></dd></div><div><dt>垂直 CRS</dt><dd><code>{raster.verticalCrsWkt ?? '未提供'}</code></dd></div></dl>
+    {raster.bands.map((band) => <details key={band.index}><summary><ChevronDown size={14} />波段 {band.index}{band.description ? ` · ${band.description}` : ''}</summary><dl className="compact-metadata"><div><dt>像元类型</dt><dd>{band.dtype}</dd></div><div><dt>单位</dt><dd>{band.unit ?? '未提供'}</dd></div><div><dt>NoData</dt><dd>{band.noData ?? '未声明'}</dd></div><div><dt>掩膜</dt><dd>{band.maskFlags.join(', ') || '未提供'}</dd></div><div><dt>颜色解释</dt><dd>{band.colorInterpretation}</dd></div><div><dt>Scale / Offset</dt><dd>{band.scale} / {band.offset}</dd></div><div><dt>内部概览</dt><dd>{band.overviews.join(', ') || '无'}</dd></div><div><dt>抽样最小/最大</dt><dd>{band.sampleMin ?? '未知'} / {band.sampleMax ?? '未知'}</dd></div><div><dt>有效抽样像元</dt><dd>{band.validSamplePixels} / {band.sampledPixels}</dd></div></dl>{!!Object.keys(band.tags).length && <dl className="stacked-metadata">{Object.entries(band.tags).map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{value}</dd></div>)}</dl>}</details>)}
+    {!!Object.keys(raster.tags).length && <details><summary><ChevronDown size={14} />栅格标签</summary><dl className="stacked-metadata">{Object.entries(raster.tags).map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{value}</dd></div>)}</dl></details>}
+    {!!Object.keys(raster.tagNamespaces).length && <details><summary><ChevronDown size={14} />扩展标签</summary>{Object.entries(raster.tagNamespaces).map(([namespace, tags]) => <div key={namespace}><h3>{namespace}</h3><dl className="stacked-metadata">{Object.entries(tags).map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{value}</dd></div>)}</dl></div>)}</details>}
+  </div>;
+}

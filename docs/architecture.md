@@ -1,18 +1,20 @@
-# Phase 1B 架构
+# Phase 1C 架构
 
-React 调用受限的 Tauri engine_request 命令。Rust 通过持久 Python 进程的 UTF-8 JSON Lines 管道发送 JSON-RPC 2.0 请求，Python 管理项目、托管矢量/表格和任务。接口见 shared/protocol.md，前端类型见 shared/contracts.ts，交付约束见 phase-1a.md 和 phase-1b.md。
+React 调用受限的 Tauri engine_request 命令。Rust 通过持久 Python 进程的 UTF-8 JSON Lines 管道发送 JSON-RPC 2.0 请求，Python 管理项目、托管矢量/表格/GeoTIFF 和任务。接口见 shared/protocol.md，前端类型见 shared/contracts.ts，阶段约束见 phase-1a.md、phase-1b.md 和 phase-1c.md。
 
 ## 进程职责
 
 - React：项目编辑、原生文件选择、图层与地图、分页属性表、导入检查与任务状态。纯浏览器明确显示原生桥接不可用。
 - Tauri：原生命令白名单、子进程启动、请求序列化、响应 ID 验证、超时、大小上限和桌面日志。
 - Python 父进程：参数验证、项目锁、SQLite 事务、任务启动/取消/回收、短查询和日志。
-- GIS worker：读取原文件、分批完整扫描、写入暂存 GeoPackage、重读验证；通过任务文件报告进度，不写项目元数据库。
+- GIS worker：读取原文件、分批完整扫描、写入暂存 GeoPackage 或原生 GeoTIFF 快照、重读验证；通过任务文件报告进度，不写项目元数据库。
 - Windows Job Object：宿主退出后终止引擎及其后代，避免孤立进程继续持有项目。
 
 每个项目同时运行一个导入、导出或坐标转点任务。worker 使用相同冻结 EXE 的私有启动模式。取消先发协作标记，再在必要时终止并回收 worker；项目关闭和切换也会结束活动任务。遗留运行状态在恢复时标记为中断。进度显示读取、写入、校验等真实阶段与可用计数，不虚构整体百分比。
 
 CSV 使用标准库 csv 严格解码，XLSX 使用 openpyxl 只读解析并保留公式文本。表格是独立非空间 GeoPackage，选择字段/CRS 后才能派生点。Excel 类型/格式信息与主表共同进入一个不可变快照，采用相同的发布、校验、导出和恢复机制。
+
+GeoTIFF 由 Rasterio/GDAL 读取，保留独立文件快照。导入扫描全部像元块可读性并核对原字节，快速检查中的 256×256 采样只提供显示范围建议。缺失 CRS 仅保留受限数据，外部附属文件依赖明确拒绝。灰度/RGB 显示使用原值范围和最近邻，不改原始像元、单位、scale/offset 或分析口径。
 
 ## 通信和恢复
 
@@ -33,3 +35,5 @@ Windows 安装器由 NSIS 生成，按当前用户安装并包含 WebView2 离�
 OpenLayers 使用 EPSG:3857 显示后端提供的 WGS84 几何，保存的地图中心为经纬度。视窗先经加密边界转换到数据 CRS，再通过 GDAL 候选读取与几何相交过滤。来源 CRS、显示 CRS、分析 CRS 独立保存；未知 CRS 可查看属性，不能正常上图或正式分析。
 
 地图和属性表共享不可变数据版本及内部字符串 ID。查询按项目会话与请求身份丢弃过期响应；跨图层点选不借用临时行号。地图显示对齐、单要素有效性和合成探针均不代表测绘精度或地类覆盖拓扑已合格。
+
+栅格地图由后端按精确 EPSG:3857 视窗生成不超过 1024×1024 的透明 PNG，经有界 RPC 返回；OpenLayers ImageLayer 与矢量层共享顺序和透明度。每层合并连续视窗请求，丢弃过期结果。地理位置查询转换到原始栅格网格并返回源像元，不能从显示图像读取科学数值。实际显示和格式边界见 phase-1c.md。

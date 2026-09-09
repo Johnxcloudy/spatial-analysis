@@ -9,13 +9,13 @@ import type { EngineMethod, ProbeReport, Project, RuntimeInfo, Task } from '../.
 vi.mock('./components/VectorMap', () => ({ VectorMap: () => <div data-testid="vector-map" /> }));
 
 const project: Project = {
-  id: 'test-project', name: '用地检查', description: '', schemaVersion: 3,
+  id: 'test-project', name: '用地检查', description: '', schemaVersion: 4,
   createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z',
   projectPath: 'C:/test/用地检查/project.spa', analysisCrs: null, displayCrs: 'EPSG:3857',
   viewState: { center: [114, 27.1], zoom: 5 },
 };
 const runtime: RuntimeInfo = {
-  protocolVersion: 3, engineVersion: '0.3.0', pythonVersion: 'test-python', packaged: false,
+  protocolVersion: 4, engineVersion: '0.4.0', pythonVersion: 'test-python', packaged: false,
   versions: { GDAL: 'test-gdal' }, drivers: { GPKG: 'test-driver' }, logPath: 'C:/test/engine.log',
 };
 const report: ProbeReport = {
@@ -23,7 +23,7 @@ const report: ProbeReport = {
   expectedIntersectionAreaM2: 5000, intersectionAreaM2: 5000, areaErrorM2: 0,
   roundTripErrorM: 0, checks: [{ id: 'fixture', label: 'Synthetic fixture', passed: true, detail: 'Test only' }],
   preview: { type: 'FeatureCollection', features: [] }, sourceBounds: [500000, 3000000, 500150, 3000100],
-  versions: {}, reportPath: 'C:/test/report.json', geopackagePath: 'C:/test/probe.gpkg', durationMs: 21,
+  versions: {}, reportPath: 'C:/test/report.json', geopackagePath: 'C:/test/probe.gpkg', geotiffPath: 'C:/test/probe.tif', durationMs: 21,
 };
 
 function fixtureBridge(native = true) {
@@ -58,6 +58,8 @@ function fixtureBridge(native = true) {
     chooseVector: vi.fn(async () => 'C:/test/land.gpkg'),
     chooseGdb: vi.fn(async () => 'C:/test/land.gdb'),
     selectTableSource: vi.fn(async () => 'C:/test/points.csv'),
+    chooseRaster: vi.fn(async () => 'C:/test/image.tif'),
+    chooseRasterExport: vi.fn(async () => 'C:/test/export.tif'),
     chooseExport: vi.fn(async () => 'C:/test/export.gpkg'),
     join: vi.fn(async (...paths: string[]) => paths.join('/')),
     diagnosticDirectory: vi.fn(async (path?: string) => path ? 'C:/test/用地检查/cache' : 'C:/test/app-cache'),

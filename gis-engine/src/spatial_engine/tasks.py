@@ -68,6 +68,7 @@ class TaskManager:
         self._process: subprocess.Popen[bytes] | None = None
         self._task_id: str | None = None
         self._work_dir: Path | None = None
+        self._operation: str | None = None
         self._stderr_handle: Any = None
 
     def start_import(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -103,12 +104,19 @@ class TaskManager:
         dataset = self.workspace.dataset(params["path"], dataset_id)
         managed_path = self.workspace.managed_path(dataset)
         destination = require_path(params["destination"], "destination")
-        if destination.suffix.lower() != ".gpkg":
-            raise InvalidParamsError("destination must use the .gpkg extension")
+        raster_export = dataset["kind"] == "raster"
+        allowed_extensions = {".tif", ".tiff"} if raster_export else {".gpkg"}
+        if destination.suffix.lower() not in allowed_extensions:
+            expected = ".tif or .tiff" if raster_export else ".gpkg"
+            raise InvalidParamsError(f"destination must use the {expected} extension")
         if destination.exists():
             raise DomainError("Export destination already exists", kind="destination_exists", detail=str(destination))
         if not destination.parent.is_dir():
             raise DomainError("Export destination directory does not exist", kind="invalid_destination", detail=str(destination.parent))
+        if raster_export:
+            from . import rasters
+
+            rasters._sidecars(destination)
         task_id = str(uuid.uuid4())
         task = self.workspace.create_task(
             "export", task_id=task_id, dataset_id=dataset_id, destination=str(destination)
@@ -119,9 +127,29 @@ class TaskManager:
             raise DomainError("Export temporary path already exists", kind="destination_exists", detail=str(publish_path))
         self._start(
             task_id,
-            "export",
+            "raster_export" if raster_export else "export",
             {"dataset": dataset, "managedPath": str(managed_path)},
             publish_path=publish_path,
+        )
+        return task
+
+    def start_raster_import(self, params: dict[str, Any]) -> dict[str, Any]:
+        require_exact_keys(params, {"path", "sourcePath"})
+        self.projects.active_path(params["path"])
+        self.workspace.recover()
+        self.harvest()
+        self._require_idle()
+        source_path = require_path(params["sourcePath"], "sourcePath")
+        if not source_path.is_file() or source_path.suffix.lower() not in {".tif", ".tiff"}:
+            raise DomainError("Raster source must be an existing GeoTIFF file", kind="unsupported_source")
+        task_id = str(uuid.uuid4())
+        dataset_id = str(uuid.uuid4())
+        task = self.workspace.create_task("import", task_id=task_id, dataset_id=dataset_id)
+        self._start(
+            task_id,
+            "raster_import",
+            {"sourcePath": str(source_path), "datasetId": dataset_id},
+            publish_path=None,
         )
         return task
 
@@ -233,6 +261,7 @@ class TaskManager:
             return
         task_id = self._task_id
         work_dir = self._work_dir
+        operation = self._operation
         return_code = self._process.wait()
         self._clear_process()
         try:
@@ -258,9 +287,9 @@ class TaskManager:
             payload = result["result"]
             task = self.workspace.task(task_id)
             if task["kind"] != "export":
-                self._complete_import(task_id, work_dir, payload)
+                self._complete_import(task_id, work_dir, payload, operation)
             else:
-                self._complete_export(task_id, work_dir, payload, task)
+                self._complete_export(task_id, work_dir, payload, task, operation)
             self._cleanup_work_dir(work_dir)
         except Exception as exc:
             message = self._exception_text(exc)
@@ -294,7 +323,7 @@ class TaskManager:
             work_dir.mkdir(parents=True, exist_ok=False)
             request_path = work_dir / "request.json"
             _atomic_json(request_path, {
-                "protocolVersion": 2, "taskId": task_id, "kind": kind,
+                "protocolVersion": 3, "taskId": task_id, "kind": kind,
                 "payload": payload, "workDir": str(work_dir.resolve()),
                 "publishPath": str(publish_path.resolve()) if publish_path is not None else None,
             })
@@ -322,6 +351,7 @@ class TaskManager:
         self._process = process
         self._task_id = task_id
         self._work_dir = work_dir
+        self._operation = kind
         self._stderr_handle = stderr_handle
 
     def _require_idle(self) -> None:
@@ -353,19 +383,28 @@ class TaskManager:
         except (DomainError, OSError, ValueError):
             return
 
-    def _complete_import(self, task_id: str, work_dir: Path, payload: Any) -> None:
+    def _complete_import(self, task_id: str, work_dir: Path, payload: Any, operation: str | None = None) -> None:
         if not isinstance(payload, dict) or set(payload) != {"dataset", "artifactPath"}:
             raise DomainError("Import result shape is invalid", kind="invalid_worker_result")
-        artifact = self._worker_artifact(work_dir, payload["artifactPath"], "snapshot.gpkg")
+        if operation is None and isinstance(payload["dataset"], dict) and payload["dataset"].get("kind") == "raster":
+            operation = "raster_import"
+        filename = "snapshot.tif" if operation == "raster_import" else "snapshot.gpkg"
+        artifact = self._worker_artifact(work_dir, payload["artifactPath"], filename)
         self.workspace.prepare_import_publication(task_id, payload["dataset"], artifact)
         self.workspace.complete_import_publication(task_id)
 
-    def _complete_export(self, task_id: str, work_dir: Path, payload: Any, task: dict[str, Any]) -> None:
+    def _complete_export(
+        self, task_id: str, work_dir: Path, payload: Any, task: dict[str, Any], operation: str | None = None
+    ) -> None:
         if not isinstance(payload, dict) or set(payload) != {
             "artifactPath", "publicationPath", "artifactSize", "artifactSha256"
         }:
             raise DomainError("Export result shape is invalid", kind="invalid_worker_result")
-        self._worker_artifact(work_dir, payload["artifactPath"], "export.gpkg")
+        if operation is None and task["datasetId"] is not None:
+            dataset = self.workspace.dataset(str(self.projects._session.path), task["datasetId"])
+            operation = "raster_export" if dataset["kind"] == "raster" else "export"
+        filename = "export.tif" if operation == "raster_export" else "export.gpkg"
+        self._worker_artifact(work_dir, payload["artifactPath"], filename)
         publication = Path(payload["publicationPath"]).resolve(strict=False) if isinstance(payload["publicationPath"], str) else None
         destination = Path(task["destination"]).resolve(strict=False)
         expected = destination.with_name(f".{destination.name}.{task_id}.pending")
@@ -406,6 +445,7 @@ class TaskManager:
         self._process = None
         self._task_id = None
         self._work_dir = None
+        self._operation = None
         self._stderr_handle = None
 
     def _cleanup_work_dir(self, work_dir: Path) -> None:

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AttributeFilter, AttributePage, Dataset, FeatureResult, VectorDataset } from '../../../shared/contracts';
+import type { AttributeFilter, AttributePage, FeatureResult, TableDataset, VectorDataset } from '../../../shared/contracts';
 import type { DesktopBridge } from './bridge';
 
 export interface AttributeQuery {
@@ -12,7 +12,7 @@ export interface AttributeQuery {
 
 export const initialAttributeQuery: AttributeQuery = { offset: 0, limit: 200, sortField: null, descending: false, filter: null };
 
-export function useAttributePage(bridge: DesktopBridge, path: string | undefined, dataset: Dataset | undefined, query: AttributeQuery, enabled: boolean, onFailure: (cause: unknown) => void) {
+export function useAttributePage(bridge: DesktopBridge, path: string | undefined, dataset: VectorDataset | TableDataset | undefined, query: AttributeQuery, enabled: boolean, onFailure: (cause: unknown) => void) {
   const [page, setPage] = useState<AttributePage | null>(null);
   const [loading, setLoading] = useState(false);
   const sequence = useRef(0);

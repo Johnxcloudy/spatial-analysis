@@ -71,81 +71,183 @@ def _bounds(value: Any, label: str) -> list[float] | None:
     return result
 
 
+def _finite_number(value: Any, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail=f"{label} is invalid")
+    return float(value)
+
+
+def _string_map(value: Any, label: str, *, maximum: int = 1024, item_maximum: int = 8192) -> None:
+    if not isinstance(value, dict) or len(value) > maximum:
+        raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail=f"{label} is invalid")
+    for key, item in value.items():
+        if not isinstance(key, str) or len(key) > 256 or not isinstance(item, str) or len(item) > item_maximum:
+            raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail=f"{label} is invalid")
+
+
+def _validate_raster_info(value: Any) -> None:
+    expected = {
+        "width", "height", "bandCount", "transform", "resolution", "bands", "horizontalUnit",
+        "verticalCrsWkt", "tags", "tagNamespaces",
+    }
+    if not isinstance(value, dict) or set(value) != expected:
+        raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="raster metadata is invalid")
+    width = _nonnegative_int(value["width"], "raster width")
+    height = _nonnegative_int(value["height"], "raster height")
+    band_count = _nonnegative_int(value["bandCount"], "raster band count")
+    if not 1 <= width <= 100_000 or not 1 <= height <= 100_000 or not 1 <= band_count <= 16:
+        raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="raster dimensions are invalid")
+    transform = value["transform"]
+    if not isinstance(transform, list) or len(transform) != 6:
+        raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="raster transform is invalid")
+    transform = [_finite_number(item, "raster transform") for item in transform]
+    if transform[0] * transform[4] - transform[1] * transform[3] == 0:
+        raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="raster transform is invalid")
+    resolution = value["resolution"]
+    if not isinstance(resolution, list) or len(resolution) != 2:
+        raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="raster resolution is invalid")
+    if any(_finite_number(item, "raster resolution") <= 0 for item in resolution):
+        raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="raster resolution is invalid")
+    bands = value["bands"]
+    if not isinstance(bands, list) or len(bands) != band_count:
+        raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="raster bands are invalid")
+    band_keys = {
+        "index", "dtype", "description", "unit", "scale", "offset", "noData", "colorInterpretation",
+        "maskFlags", "overviews", "tags", "sampleMin", "sampleMax", "sampledPixels", "validSamplePixels",
+    }
+    for expected_index, band in enumerate(bands, 1):
+        if not isinstance(band, dict) or set(band) != band_keys or band["index"] != expected_index:
+            raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="raster band is invalid")
+        for key in ("dtype", "colorInterpretation"):
+            _text(band[key], f"raster band {key}", 256)
+        for key in ("description", "unit"):
+            _text(band[key], f"raster band {key}", 8192, nullable=True)
+        _finite_number(band["scale"], "raster band scale")
+        _finite_number(band["offset"], "raster band offset")
+        no_data = band["noData"]
+        if no_data is not None and no_data not in ("NaN", "Infinity", "-Infinity"):
+            _finite_number(no_data, "raster band NoData")
+        flags = band["maskFlags"]
+        if not isinstance(flags, list) or len(flags) > 64 or any(not isinstance(item, str) or len(item) > 256 for item in flags):
+            raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="raster mask flags are invalid")
+        overviews = band["overviews"]
+        if (
+            not isinstance(overviews, list)
+            or len(overviews) > 64
+            or any(isinstance(item, bool) or not isinstance(item, int) or item <= 0 for item in overviews)
+        ):
+            raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="raster overviews are invalid")
+        _string_map(band["tags"], "raster band tags", item_maximum=MAX_DATASET_JSON_BYTES)
+        sampled = _nonnegative_int(band["sampledPixels"], "sampled pixels")
+        valid = _nonnegative_int(band["validSamplePixels"], "valid sampled pixels")
+        if sampled > 256 * 256 or valid > sampled:
+            raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="raster sample counts are invalid")
+        sample_min, sample_max = band["sampleMin"], band["sampleMax"]
+        if valid == 0:
+            if sample_min is not None or sample_max is not None:
+                raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="raster sample range is invalid")
+        else:
+            low = _finite_number(sample_min, "raster sample minimum")
+            high = _finite_number(sample_max, "raster sample maximum")
+            if low > high:
+                raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="raster sample range is invalid")
+    for key in ("horizontalUnit", "verticalCrsWkt"):
+        _text(value[key], f"raster {key}", 131_072, nullable=True)
+    _string_map(value["tags"], "raster tags", item_maximum=MAX_DATASET_JSON_BYTES)
+    namespaces = value["tagNamespaces"]
+    if not isinstance(namespaces, dict) or len(namespaces) > 256:
+        raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="raster tag namespaces are invalid")
+    for namespace, tags in namespaces.items():
+        if not isinstance(namespace, str) or not namespace or len(namespace) > 256:
+            raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="raster tag namespace is invalid")
+        _string_map(tags, "raster namespace tags", item_maximum=MAX_DATASET_JSON_BYTES)
+
+
 def _validate_dataset(dataset: Any) -> tuple[dict[str, Any], str]:
     if not isinstance(dataset, dict):
         raise DomainError("Dataset metadata is invalid", kind="invalid_dataset")
-    expected = {
-        "id", "version", "name", "kind", "source", "relativePath", "storageLayer", "featureCount",
-        "geometryType", "crsWkt", "crsAuthority", "bounds", "boundsWgs84", "fields", "internalIdField",
-        "sourceFidField", "report", "createdAt",
+    common = {
+        "id", "version", "name", "kind", "source", "relativePath", "crsWkt", "crsAuthority", "bounds",
+        "boundsWgs84", "report", "createdAt",
     }
-    if dataset.get("kind") == "table":
-        expected.add("cellMetadataLayer")
+    kind = dataset.get("kind")
+    if kind == "raster":
+        expected = common | {"raster"}
+    else:
+        expected = common | {
+            "storageLayer", "featureCount", "geometryType", "fields", "internalIdField", "sourceFidField",
+        }
+        if kind == "table":
+            expected.add("cellMetadataLayer")
     if set(dataset) != expected:
         raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="dataset fields do not match")
     dataset_id = _uuid_string(dataset["id"], "dataset id")
     if not isinstance(dataset["version"], str) or re.fullmatch(r"[0-9a-fA-F]{64}", dataset["version"]) is None:
         raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="dataset version is invalid")
     _text(dataset["name"], "dataset name", MAX_NAME_LENGTH)
-    if dataset["kind"] not in {"vector", "table"}:
+    if kind not in {"vector", "table", "raster"}:
         raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="kind is invalid")
     source = dataset["source"]
     source_keys = {"path", "layer", "driver", "fingerprint", "encoding", "assignedCrs", "crsWkt", "metadata"}
     if not isinstance(source, dict) or set(source) != source_keys:
         raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="source fields do not match")
-    for key in ("path", "layer", "driver", "fingerprint"):
+    for key in ("path", "driver", "fingerprint"):
         _text(source[key], f"source {key}", 32_767)
+    if kind == "raster":
+        if not isinstance(source["layer"], str) or len(source["layer"]) > 32_767:
+            raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="source layer is invalid")
+    else:
+        _text(source["layer"], "source layer", 32_767)
     for key in ("encoding", "assignedCrs", "crsWkt"):
         _text(source[key], f"source {key}", 131_072, nullable=True)
-    metadata = source["metadata"]
-    if not isinstance(metadata, dict) or len(metadata) > 256:
-        raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="source metadata is invalid")
-    for key, value in metadata.items():
-        if not isinstance(key, str) or not isinstance(value, str) or len(key) > 256 or len(value) > 8192:
-            raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="source metadata is invalid")
-    expected_relative = f"datasets/{dataset_id}.gpkg"
+    _string_map(source["metadata"], "source metadata", maximum=256)
+    expected_relative = f"rasters/{dataset_id}.tif" if kind == "raster" else f"datasets/{dataset_id}.gpkg"
     if dataset["relativePath"] != expected_relative:
         raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="relativePath is invalid")
-    storage_layer = _text(dataset["storageLayer"], "storage layer", 256)
-    if dataset["kind"] == "table" and storage_layer != "records":
-        raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="table storage layer is invalid")
-    _nonnegative_int(dataset["featureCount"], "feature count")
-    if dataset["kind"] == "vector":
-        _text(dataset["geometryType"], "geometry type", 256)
-        _text(dataset["crsWkt"], "CRS WKT", 131_072, nullable=True)
-        _text(dataset["crsAuthority"], "CRS authority", 256, nullable=True)
-        _bounds(dataset["bounds"], "bounds")
-        _bounds(dataset["boundsWgs84"], "WGS84 bounds")
+    _text(dataset["crsWkt"], "CRS WKT", 131_072, nullable=True)
+    _text(dataset["crsAuthority"], "CRS authority", 256, nullable=True)
+    _bounds(dataset["bounds"], "bounds")
+    _bounds(dataset["boundsWgs84"], "WGS84 bounds")
+    if kind == "raster":
+        _validate_raster_info(dataset["raster"])
     else:
+        storage_layer = _text(dataset["storageLayer"], "storage layer", 256)
+        if kind == "table" and storage_layer != "records":
+            raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="table storage layer is invalid")
+        _nonnegative_int(dataset["featureCount"], "feature count")
+    if kind == "vector":
+        _text(dataset["geometryType"], "geometry type", 256)
+    elif kind == "table":
         if any(dataset[key] is not None for key in ("geometryType", "crsWkt", "crsAuthority", "bounds", "boundsWgs84")):
             raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="table spatial metadata must be null")
         if source["assignedCrs"] is not None or source["crsWkt"] is not None:
             raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="table source CRS must be null")
         if dataset["cellMetadataLayer"] not in {None, "cell_metadata"}:
             raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="cell metadata layer is invalid")
-    fields = dataset["fields"]
-    if not isinstance(fields, list) or len(fields) > MAX_FIELDS:
-        raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="fields are invalid")
-    field_names: set[str] = set()
-    field_keys = {"name", "sourceType", "storageType", "nullable", "alias", "width", "precision", "metadataStatus"}
-    for field in fields:
-        if not isinstance(field, dict) or set(field) != field_keys:
-            raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="field metadata is invalid")
-        name = _text(field["name"], "field name", 256)
-        if name in field_names:
-            raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="field names must be unique")
-        field_names.add(name)
-        _text(field["sourceType"], "source type", 256)
-        _text(field["storageType"], "storage type", 256)
-        if field["nullable"] is not None and not isinstance(field["nullable"], bool):
-            raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="nullable is invalid")
-        _text(field["alias"], "field alias", 1024, nullable=True)
-        _nonnegative_int(field["width"], "field width", nullable=True)
-        _nonnegative_int(field["precision"], "field precision", nullable=True)
-        if field["metadataStatus"] not in {"not_read", "partial"}:
-            raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="metadataStatus is invalid")
-    _text(dataset["internalIdField"], "internal id field", 256)
-    _text(dataset["sourceFidField"], "source FID field", 256)
+    if kind != "raster":
+        fields = dataset["fields"]
+        if not isinstance(fields, list) or len(fields) > MAX_FIELDS:
+            raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="fields are invalid")
+        field_names: set[str] = set()
+        field_keys = {"name", "sourceType", "storageType", "nullable", "alias", "width", "precision", "metadataStatus"}
+        for field in fields:
+            if not isinstance(field, dict) or set(field) != field_keys:
+                raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="field metadata is invalid")
+            name = _text(field["name"], "field name", 256)
+            if name in field_names:
+                raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="field names must be unique")
+            field_names.add(name)
+            _text(field["sourceType"], "source type", 256)
+            _text(field["storageType"], "storage type", 256)
+            if field["nullable"] is not None and not isinstance(field["nullable"], bool):
+                raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="nullable is invalid")
+            _text(field["alias"], "field alias", 1024, nullable=True)
+            _nonnegative_int(field["width"], "field width", nullable=True)
+            _nonnegative_int(field["precision"], "field precision", nullable=True)
+            if field["metadataStatus"] not in {"not_read", "partial"}:
+                raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="metadataStatus is invalid")
+        _text(dataset["internalIdField"], "internal id field", 256)
+        _text(dataset["sourceFidField"], "source FID field", 256)
     report = dataset["report"]
     if not isinstance(report, dict) or set(report) != {
         "status", "checks", "warnings", "notChecked", "counts", "validatorVersion"
@@ -235,10 +337,12 @@ class WorkspaceStore:
         self.recover()
         with self._connect(path) as connection:
             project_id = connection.execute("SELECT project_id FROM project_metadata WHERE singleton = 1").fetchone()[0]
-            datasets = [json.loads(row[0]) for row in connection.execute(
-                "SELECT dataset_json FROM datasets ORDER BY created_at, dataset_id"
-            )]
-            layers = [self._row_to_layer(row) for row in connection.execute(
+            dataset_rows = connection.execute(
+                "SELECT dataset_id, dataset_json FROM datasets ORDER BY created_at, dataset_id"
+            ).fetchall()
+            datasets = [self._stored_dataset(row["dataset_json"], row["dataset_id"]) for row in dataset_rows]
+            datasets_by_id = {dataset["id"]: dataset for dataset in datasets}
+            layers = [self._row_to_layer(row, datasets_by_id.get(row["dataset_id"])) for row in connection.execute(
                 "SELECT * FROM map_layers ORDER BY display_order, layer_id"
             )]
             tasks = [_row_to_task(row) for row in connection.execute(
@@ -256,23 +360,20 @@ class WorkspaceStore:
             row = connection.execute("SELECT dataset_json FROM datasets WHERE dataset_id = ?", (dataset_id,)).fetchone()
         if row is None:
             raise DomainError("Dataset does not exist", kind="dataset_not_found", detail=dataset_id)
-        try:
-            dataset = json.loads(row[0])
-        except (json.JSONDecodeError, TypeError) as exc:
-            raise DomainError("Dataset metadata is corrupt", kind="invalid_project", detail=dataset_id) from exc
-        _validate_dataset(dataset)
-        return dataset
+        return self._stored_dataset(row[0], dataset_id)
 
     def managed_path(self, dataset: dict[str, Any]) -> Path:
         dataset, _ = _validate_dataset(dataset)
         root = self._project_root().resolve()
-        dataset_root = (root / "datasets").resolve(strict=False)
+        directory = "rasters" if dataset["kind"] == "raster" else "datasets"
+        filename = f"{dataset['id']}.tif" if dataset["kind"] == "raster" else f"{dataset['id']}.gpkg"
+        dataset_root = (root / directory).resolve(strict=False)
         try:
             dataset_root.relative_to(root)
         except ValueError as exc:
             raise DomainError("Managed dataset directory escapes the project", kind="invalid_project") from exc
         relative = PurePosixPath(dataset["relativePath"])
-        if relative.is_absolute() or ".." in relative.parts or relative.parts != ("datasets", f"{dataset['id']}.gpkg"):
+        if relative.is_absolute() or ".." in relative.parts or relative.parts != (directory, filename):
             raise DomainError("Dataset path is invalid", kind="invalid_dataset")
         managed = (root / Path(*relative.parts)).resolve(strict=False)
         if managed.parent != dataset_root:
@@ -286,7 +387,7 @@ class WorkspaceStore:
         path = self._path(params["path"])
         layer_id = require_string(params["layerId"], "layerId", maximum=64)
         changes = params["changes"]
-        allowed = {"name", "visible", "opacity", "color", "categoryField", "categoryColors"}
+        allowed = {"name", "visible", "opacity", "color", "categoryField", "categoryColors", "rasterStyle"}
         if not isinstance(changes, dict) or not changes or not set(changes) <= allowed:
             raise InvalidParamsError("changes must contain supported layer properties")
         with self._connect(path) as connection:
@@ -307,35 +408,50 @@ class WorkspaceStore:
                 values["opacity"] = opacity
             if "color" in changes:
                 values["color"] = self._color(changes["color"], "changes.color")
-            dataset = json.loads(connection.execute(
+            dataset_row = connection.execute(
                 "SELECT dataset_json FROM datasets WHERE dataset_id = ?", (row["dataset_id"],)
-            ).fetchone()[0])
-            if dataset["kind"] != "vector":
-                raise DomainError("Only vector datasets can have map layers", kind="invalid_project")
-            field_names = {field["name"] for field in dataset["fields"]}
-            if "categoryField" in changes:
-                category_field = changes["categoryField"]
-                if category_field is not None:
-                    category_field = require_string(category_field, "changes.categoryField", maximum=256)
-                    if category_field not in field_names:
-                        raise InvalidParamsError("changes.categoryField is not a dataset field")
-                values["category_field"] = category_field
-            if "categoryColors" in changes:
-                colors = changes["categoryColors"]
-                if not isinstance(colors, dict) or len(colors) > 256:
-                    raise InvalidParamsError("changes.categoryColors must be an object with at most 256 entries")
-                clean_colors: dict[str, str] = {}
-                for key, color in colors.items():
-                    if not isinstance(key, str) or len(key) > 1024:
-                        raise InvalidParamsError("category color keys must be strings")
-                    clean_colors[key] = self._color(color, "category color")
-                values["category_colors"] = json.dumps(clean_colors, separators=(",", ":"))
+            ).fetchone()
+            if dataset_row is None:
+                raise DomainError("Layer references a missing dataset", kind="invalid_project", detail=layer_id)
+            dataset = self._stored_dataset(dataset_row[0], row["dataset_id"])
+            vector_changes = {"color", "categoryField", "categoryColors"} & set(changes)
+            raster_changes = {"rasterStyle"} & set(changes)
+            if dataset["kind"] == "vector":
+                if raster_changes:
+                    raise InvalidParamsError("rasterStyle is only supported for raster layers")
+                field_names = {field["name"] for field in dataset["fields"]}
+                if "categoryField" in changes:
+                    category_field = changes["categoryField"]
+                    if category_field is not None:
+                        category_field = require_string(category_field, "changes.categoryField", maximum=256)
+                        if category_field not in field_names:
+                            raise InvalidParamsError("changes.categoryField is not a dataset field")
+                    values["category_field"] = category_field
+                if "categoryColors" in changes:
+                    colors = changes["categoryColors"]
+                    if not isinstance(colors, dict) or len(colors) > 256:
+                        raise InvalidParamsError("changes.categoryColors must be an object with at most 256 entries")
+                    clean_colors: dict[str, str] = {}
+                    for key, color in colors.items():
+                        if not isinstance(key, str) or len(key) > 1024:
+                            raise InvalidParamsError("category color keys must be strings")
+                        clean_colors[key] = self._color(color, "category color")
+                    values["category_colors"] = json.dumps(clean_colors, separators=(",", ":"))
+            elif dataset["kind"] == "raster":
+                if vector_changes:
+                    raise InvalidParamsError("Vector style properties are only supported for vector layers")
+                if "rasterStyle" in changes:
+                    from . import rasters
+
+                    values["raster_style"] = _json_dumps(rasters.validate_style(changes["rasterStyle"], dataset))
+            else:
+                raise DomainError("Table datasets cannot have map layers", kind="invalid_project", detail=layer_id)
             assignments = ", ".join(f"{column} = ?" for column in values)
             connection.execute(
                 f"UPDATE map_layers SET {assignments} WHERE layer_id = ?", (*values.values(), layer_id)
             )
             updated = connection.execute("SELECT * FROM map_layers WHERE layer_id = ?", (layer_id,)).fetchone()
-        return self._row_to_layer(updated)
+        return self._row_to_layer(updated, dataset)
 
     def reorder_layers(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         require_exact_keys(params, {"path", "layerIds"})
@@ -353,8 +469,12 @@ class WorkspaceStore:
             connection.execute("UPDATE map_layers SET display_order = display_order + 1000000")
             for order, layer_id in enumerate(layer_ids):
                 connection.execute("UPDATE map_layers SET display_order = ? WHERE layer_id = ?", (order, layer_id))
-            rows = connection.execute("SELECT * FROM map_layers ORDER BY display_order, layer_id").fetchall()
-        return [self._row_to_layer(row) for row in rows]
+            rows = connection.execute(
+                "SELECT map_layers.*, datasets.dataset_json FROM map_layers "
+                "JOIN datasets ON datasets.dataset_id = map_layers.dataset_id "
+                "ORDER BY display_order, layer_id"
+            ).fetchall()
+        return [self._row_to_layer(row, self._stored_dataset(row["dataset_json"], row["dataset_id"])) for row in rows]
 
     def remove_layer(self, params: dict[str, Any]) -> dict[str, bool]:
         require_exact_keys(params, {"path", "layerId"})
@@ -495,14 +615,21 @@ class WorkspaceStore:
             if count >= MAX_DATASETS:
                 raise DomainError("Project dataset limit reached", kind="dataset_limit")
             connection.execute(
-                "INSERT INTO datasets VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO datasets (dataset_id, version, relative_path, dataset_json, created_at) VALUES (?, ?, ?, ?, ?)",
                 (dataset["id"], dataset["version"], dataset["relativePath"], serialized, dataset["createdAt"]),
             )
-            if dataset["kind"] == "vector":
+            if dataset["kind"] in {"vector", "raster"}:
                 next_order = connection.execute("SELECT COALESCE(MAX(display_order), -1) + 1 FROM map_layers").fetchone()[0]
+                raster_style = None
+                if dataset["kind"] == "raster":
+                    from . import rasters
+
+                    raster_style = _json_dumps(rasters.validate_style(rasters.default_style(dataset), dataset))
                 connection.execute(
-                    "INSERT INTO map_layers VALUES (?, ?, ?, 1, 1.0, '#2563EB', NULL, '{}', ?)",
-                    (str(uuid.uuid4()), dataset["id"], dataset["name"], next_order),
+                    "INSERT INTO map_layers "
+                    "(layer_id, dataset_id, name, visible, opacity, color, category_field, category_colors, display_order, raster_style) "
+                    "VALUES (?, ?, ?, 1, 1.0, '#2563EB', NULL, '{}', ?, ?)",
+                    (str(uuid.uuid4()), dataset["id"], dataset["name"], next_order, raster_style),
                 )
             connection.execute(
                 "UPDATE tasks SET status = 'completed', stage = 'completed', completed = total, "
@@ -573,6 +700,11 @@ class WorkspaceStore:
         temporary = Path(pending["temporary_path"]).resolve(strict=False)
         if temporary.parent != destination.parent or temporary.name != f".{destination.name}.{task_id}.pending":
             raise DomainError("Export publication journal is invalid", kind="invalid_project")
+        dataset = self.dataset(str(path), task["datasetId"]) if task["datasetId"] is not None else None
+        if dataset is not None and dataset["kind"] == "raster":
+            from . import rasters
+
+            rasters._sidecars(destination)
         expected = (pending["artifact_size"], pending["artifact_sha256"])
         if destination.exists():
             if not recovering or not destination.is_file() or _sha256(destination) != expected:
@@ -627,7 +759,7 @@ class WorkspaceStore:
                 self.complete_export_publication(task_id, recovering=True)
                 self._cleanup_task_directory(task_id)
             except DomainError as exc:
-                if exc.kind in {"export_failed", "publication_failed"}:
+                if exc.kind in {"export_failed", "external_raster_dependencies", "publication_failed"}:
                     self.update_task(
                         task_id, status="interrupted", stage="publication_pending", error=exc.message
                     )
@@ -740,13 +872,39 @@ class WorkspaceStore:
         return value.upper()
 
     @staticmethod
-    def _row_to_layer(row: sqlite3.Row) -> dict[str, Any]:
+    def _stored_dataset(serialized: Any, dataset_id: str) -> dict[str, Any]:
+        try:
+            dataset = json.loads(serialized)
+            _validate_dataset(dataset)
+        except (json.JSONDecodeError, TypeError, DomainError) as exc:
+            raise DomainError("Dataset metadata is corrupt", kind="invalid_project", detail=dataset_id) from exc
+        return dataset
+
+    @staticmethod
+    def _row_to_layer(row: sqlite3.Row, dataset: dict[str, Any] | None) -> dict[str, Any]:
+        if dataset is None:
+            raise DomainError("Layer references a missing dataset", kind="invalid_project", detail=row["layer_id"])
         try:
             category_colors = json.loads(row["category_colors"])
         except (json.JSONDecodeError, TypeError) as exc:
             raise DomainError("Layer metadata is corrupt", kind="invalid_project", detail=row["layer_id"]) from exc
-        return {
+        layer = {
             "id": row["layer_id"], "datasetId": row["dataset_id"], "name": row["name"],
             "visible": bool(row["visible"]), "opacity": row["opacity"], "color": row["color"],
             "categoryField": row["category_field"], "categoryColors": category_colors, "order": row["display_order"],
         }
+        if dataset["kind"] == "raster":
+            if row["raster_style"] is None:
+                raise DomainError("Raster layer style is missing", kind="invalid_project", detail=row["layer_id"])
+            try:
+                from . import rasters
+
+                layer["rasterStyle"] = rasters.validate_style(json.loads(row["raster_style"]), dataset)
+            except (json.JSONDecodeError, TypeError, InvalidParamsError) as exc:
+                raise DomainError("Raster layer style is corrupt", kind="invalid_project", detail=row["layer_id"]) from exc
+        elif dataset["kind"] == "vector":
+            if row["raster_style"] is not None:
+                raise DomainError("Vector layer has a raster style", kind="invalid_project", detail=row["layer_id"])
+        else:
+            raise DomainError("Table datasets cannot have map layers", kind="invalid_project", detail=row["layer_id"])
+        return layer

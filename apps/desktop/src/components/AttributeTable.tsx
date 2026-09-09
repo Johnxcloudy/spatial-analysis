@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Filter, LoaderCircle, Search, X } from 'lucide-react';
-import type { AttributePage, AttributeFilter, Dataset, FeatureResult } from '../../../../shared/contracts';
+import type { AttributePage, AttributeFilter, TableDataset, VectorDataset, FeatureResult } from '../../../../shared/contracts';
 import type { AttributeQuery } from '../use-vector-data';
 import { displayValue } from '../vector-style';
 
 export function AttributeTable({ dataset, page, loading, query, setQuery, selectedId, selected, selectedSourceRow, onSelect, onClear, enabled }: {
-  dataset: Dataset | undefined;
+  dataset: VectorDataset | TableDataset | undefined;
   page: AttributePage | null;
   loading: boolean;
   query: AttributeQuery;

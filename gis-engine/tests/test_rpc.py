@@ -15,8 +15,8 @@ def test_runtime_info_matches_contract(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
     result = Engine().dispatch("runtime.info", {})
 
-    assert result["protocolVersion"] == 3
-    assert result["engineVersion"] == "0.3.0"
+    assert result["protocolVersion"] == 4
+    assert result["engineVersion"] == "0.4.0"
     assert result["pythonVersion"].startswith("3.12")
     assert isinstance(result["packaged"], bool)
     assert {"geopandas", "shapely", "pyogrio", "pyproj", "rasterio", "openpyxl"} <= result["versions"].keys()
@@ -42,7 +42,8 @@ def test_json_rpc_errors_are_stable_and_preserve_id() -> None:
     assert invalid["error"]["data"]["kind"] == "invalid_params"
 
 
-@pytest.mark.parametrize("method", ["table.inspect", "table.import", "table.points", "table.page", "table.export"])
+@pytest.mark.parametrize("method", ["table.inspect", "table.import", "table.points", "table.page", "table.export",
+                                  "raster.inspect", "raster.import", "raster.export", "raster.render", "raster.sample"])
 def test_table_routes_reject_incomplete_parameters(method: str) -> None:
     engine = Engine()
     try:
@@ -60,6 +61,12 @@ def test_table_routes_reject_incomplete_parameters(method: str) -> None:
     ("vector.feature", "table", {"featureId": "1"}),
     ("table.export", "vector", {"destination": "unused.gpkg"}),
     ("vector.export", "table", {"destination": "unused.gpkg"}),
+    ("raster.export", "vector", {"destination": "unused.tif"}),
+    ("raster.render", "table", {"bbox": [0, 0, 1, 1], "width": 256, "height": 256, "style": {}}),
+    ("raster.sample", "vector", {"coordinate": [114, 27]}),
+    ("vector.viewport", "raster", {"bbox": [113, 26, 115, 28], "limit": 2000, "propertyFields": []}),
+    ("vector.page", "raster", {"offset": 0, "limit": 200, "sortField": None, "descending": False, "filter": None}),
+    ("table.export", "raster", {"destination": "unused.gpkg"}),
 ])
 def test_routes_reject_wrong_dataset_kind_before_io(monkeypatch, method: str, kind: str, extra: dict) -> None:
     engine = Engine()

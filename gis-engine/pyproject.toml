@@ -4,10 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "spatial-analysis-engine"
-version = "0.3.0"
+version = "0.4.0"
 description = "Local GIS engine for Spatial Analysis Desktop"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+  "affine==2.4.0",
   "defusedxml==0.7.1",
   "geopandas==1.1.1",
   "numpy==2.4.2",

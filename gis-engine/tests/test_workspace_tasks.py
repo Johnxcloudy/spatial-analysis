@@ -15,6 +15,7 @@ from spatial_engine.errors import DomainError, InvalidParamsError
 from spatial_engine.projects import ProjectStore
 from spatial_engine.tasks import TaskManager
 from spatial_engine.workspace import WorkspaceStore
+from raster_fixtures import create_raster_fixture_bundle
 
 
 def _stores(tmp_path: Path):
@@ -98,9 +99,74 @@ def _table_dataset(dataset_id: str | None = None) -> dict:
     return dataset
 
 
+def _raster_dataset(dataset_id: str | None = None) -> dict:
+    dataset_id = dataset_id or str(uuid.uuid4())
+    return {
+        "id": dataset_id,
+        "version": "0" * 64,
+        "name": "Elevation",
+        "kind": "raster",
+        "source": {
+            "path": "C:/input/elevation.tif",
+            "layer": "",
+            "driver": "GTiff",
+            "fingerprint": "sha256:test",
+            "encoding": None,
+            "assignedCrs": None,
+            "crsWkt": "EPSG:4326",
+            "metadata": {"snapshotPolicy": "byte-for-byte self-contained GeoTIFF"},
+        },
+        "relativePath": f"rasters/{dataset_id}.tif",
+        "crsWkt": "EPSG:4326",
+        "crsAuthority": "EPSG:4326",
+        "bounds": [114.0, 26.0, 115.0, 27.0],
+        "boundsWgs84": [114.0, 26.0, 115.0, 27.0],
+        "raster": {
+            "width": 2,
+            "height": 2,
+            "bandCount": 1,
+            "transform": [0.5, 0.0, 114.0, 0.0, -0.5, 27.0],
+            "resolution": [0.5, 0.5],
+            "bands": [
+                {
+                    "index": 1,
+                    "dtype": "uint16",
+                    "description": "Elevation",
+                    "unit": "m",
+                    "scale": 1.0,
+                    "offset": 0.0,
+                    "noData": 65535.0,
+                    "colorInterpretation": "gray",
+                    "maskFlags": ["nodata"],
+                    "overviews": [],
+                    "tags": {},
+                    "sampleMin": 0.0,
+                    "sampleMax": 100.0,
+                    "sampledPixels": 4,
+                    "validSamplePixels": 3,
+                }
+            ],
+            "horizontalUnit": "degree",
+            "verticalCrsWkt": None,
+            "tags": {},
+            "tagNamespaces": {},
+        },
+        "report": {
+            "status": "warning",
+            "checks": [],
+            "warnings": [],
+            "notChecked": [],
+            "counts": {"pixels": 4, "bands": 1},
+            "validatorVersion": "test",
+        },
+        "createdAt": "2026-09-09T00:00:00.000000Z",
+    }
+
+
 def _stage_import(project: dict, workspace: WorkspaceStore, dataset: dict, task_id: str) -> Path:
     root = Path(project["projectPath"]).parent
-    staged = root / "staging" / "tasks" / task_id / "snapshot.gpkg"
+    filename = "snapshot.tif" if dataset["kind"] == "raster" else "snapshot.gpkg"
+    staged = root / "staging" / "tasks" / task_id / filename
     staged.parent.mkdir(parents=True)
     content = b"validated snapshot"
     staged.write_bytes(content)
@@ -179,6 +245,110 @@ def test_table_publication_uses_generic_registry_without_map_layer(tmp_path: Pat
     assert completed["status"] == "completed"
     assert snapshot["datasets"] == [dataset]
     assert snapshot["layers"] == []
+    projects.close()
+
+
+def test_raster_publication_uses_raster_directory_and_default_style(tmp_path: Path) -> None:
+    from spatial_engine import rasters
+
+    projects, project, workspace = _stores(tmp_path)
+    dataset = _raster_dataset()
+    task_id = str(uuid.uuid4())
+    staged = _stage_import(project, workspace, dataset, task_id)
+
+    completed = workspace.complete_import_publication(task_id)
+    snapshot = workspace.get({"path": project["projectPath"]})
+    final = Path(project["projectPath"]).parent / dataset["relativePath"]
+
+    assert completed["status"] == "completed"
+    assert snapshot["datasets"] == [dataset]
+    assert snapshot["layers"] == [
+        {
+            "id": snapshot["layers"][0]["id"],
+            "datasetId": dataset["id"],
+            "name": dataset["name"],
+            "visible": True,
+            "opacity": 1.0,
+            "color": "#2563EB",
+            "categoryField": None,
+            "categoryColors": {},
+            "order": 0,
+            "rasterStyle": rasters.default_style(dataset),
+        }
+    ]
+    assert final.read_bytes() == b"validated snapshot"
+    assert not staged.exists()
+    assert workspace.managed_path(dataset) == final.resolve()
+    projects.close()
+
+
+def test_raster_publication_accepts_large_tags_within_metadata_budget(tmp_path: Path) -> None:
+    projects, project, workspace = _stores(tmp_path)
+    dataset = _raster_dataset()
+    dataset["raster"]["tags"]["xml_metadata"] = "x" * 9_000
+    dataset["raster"]["bands"][0]["tags"]["long_value"] = "y" * 9_000
+    dataset["raster"]["tagNamespaces"]["custom"] = {"document": "z" * 9_000}
+    task_id = str(uuid.uuid4())
+    _stage_import(project, workspace, dataset, task_id)
+
+    workspace.complete_import_publication(task_id)
+
+    assert workspace.get({"path": project["projectPath"]})["datasets"] == [dataset]
+    projects.close()
+
+
+def test_layer_style_updates_are_dataset_kind_specific(tmp_path: Path) -> None:
+    projects, project, workspace = _stores(tmp_path)
+    vector, raster = _dataset(), _raster_dataset()
+    for dataset in (vector, raster):
+        task_id = str(uuid.uuid4())
+        _stage_import(project, workspace, dataset, task_id)
+        workspace.complete_import_publication(task_id)
+    layers = {layer["datasetId"]: layer for layer in workspace.get({"path": project["projectPath"]})["layers"]}
+    constant_style = {"mode": "gray", "bands": [1], "ranges": [[5, 5]], "resampling": "nearest"}
+
+    updated = workspace.update_layer(
+        {
+            "path": project["projectPath"],
+            "layerId": layers[raster["id"]]["id"],
+            "changes": {"name": "DEM", "opacity": 0.6, "rasterStyle": constant_style},
+        }
+    )
+    assert updated["name"] == "DEM"
+    assert updated["opacity"] == 0.6
+    assert updated["rasterStyle"] == {**constant_style, "ranges": [[5.0, 5.0]]}
+
+    with pytest.raises(InvalidParamsError):
+        workspace.update_layer(
+            {"path": project["projectPath"], "layerId": layers[raster["id"]]["id"], "changes": {"color": "#000000"}}
+        )
+    with pytest.raises(InvalidParamsError):
+        workspace.update_layer(
+            {"path": project["projectPath"], "layerId": layers[vector["id"]]["id"], "changes": {"rasterStyle": constant_style}}
+        )
+    with pytest.raises(InvalidParamsError):
+        workspace.update_layer(
+            {
+                "path": project["projectPath"],
+                "layerId": layers[raster["id"]]["id"],
+                "changes": {"rasterStyle": {**constant_style, "ranges": [[0, float("inf")]]}},
+            }
+        )
+    projects.close()
+
+
+def test_workspace_rejects_corrupt_or_kind_incompatible_raster_style(tmp_path: Path) -> None:
+    projects, project, workspace = _stores(tmp_path)
+    raster = _raster_dataset()
+    task_id = str(uuid.uuid4())
+    _stage_import(project, workspace, raster, task_id)
+    workspace.complete_import_publication(task_id)
+    with sqlite3.connect(project["projectPath"]) as connection:
+        connection.execute("UPDATE map_layers SET raster_style = '{broken'")
+
+    with pytest.raises(DomainError) as error:
+        workspace.get({"path": project["projectPath"]})
+    assert error.value.kind == "invalid_project"
     projects.close()
 
 
@@ -348,6 +518,12 @@ def test_managed_path_rejects_wrong_or_traversing_relative_path(tmp_path: Path) 
     with pytest.raises(DomainError) as error:
         workspace.managed_path(dataset)
     assert error.value.kind == "invalid_dataset"
+
+    raster = _raster_dataset()
+    raster["relativePath"] = f"datasets/{raster['id']}.tif"
+    with pytest.raises(DomainError) as error:
+        workspace.managed_path(raster)
+    assert error.value.kind == "invalid_dataset"
     projects.close()
 
 
@@ -388,7 +564,7 @@ def test_task_cancel_reaps_a_real_child_process(tmp_path: Path) -> None:
     projects.close()
 
 
-def test_table_and_points_tasks_write_private_protocol_two_requests(tmp_path: Path) -> None:
+def test_table_and_points_tasks_write_private_protocol_three_requests(tmp_path: Path) -> None:
     projects, project, workspace = _stores(tmp_path)
 
     def command(request_path: Path) -> list[str]:
@@ -411,7 +587,7 @@ def test_table_and_points_tasks_write_private_protocol_two_requests(tmp_path: Pa
         (Path(project["projectPath"]).parent / "staging" / "tasks" / imported["id"] / "request.json").read_text()
     )
     assert imported["kind"] == "import"
-    assert import_request["protocolVersion"] == 2
+    assert import_request["protocolVersion"] == 3
     assert import_request["kind"] == "table_import"
     assert import_request["payload"]["datasetId"] == imported["datasetId"]
     manager.cancel({"path": project["projectPath"], "taskId": imported["id"]})
@@ -431,12 +607,124 @@ def test_table_and_points_tasks_write_private_protocol_two_requests(tmp_path: Pa
         (Path(project["projectPath"]).parent / "staging" / "tasks" / points["id"] / "request.json").read_text()
     )
     assert points["kind"] == "points"
-    assert points_request["protocolVersion"] == 2
+    assert points_request["protocolVersion"] == 3
     assert points_request["kind"] == "points"
     assert points_request["payload"]["dataset"]["id"] == table["id"]
     assert points_request["payload"]["datasetId"] == points["datasetId"]
     manager.cancel({"path": project["projectPath"], "taskId": points["id"]})
     projects.close()
+
+
+def test_raster_tasks_write_protocol_three_requests_and_enforce_extensions(tmp_path: Path) -> None:
+    projects, project, workspace = _stores(tmp_path)
+
+    def command(request_path: Path) -> list[str]:
+        script = (
+            "import sys,time; from pathlib import Path; w=Path(sys.argv[1]).parent; "
+            "\nwhile not w.joinpath('cancel.flag').exists(): time.sleep(0.02)"
+        )
+        return [sys.executable, "-c", script, str(request_path)]
+
+    manager = TaskManager(projects, workspace, command_factory=command)
+    source = tmp_path / "source.tiff"
+    source.write_bytes(b"synthetic raster placeholder")
+    imported = manager.start_raster_import(
+        {"path": project["projectPath"], "sourcePath": str(source)}
+    )
+    import_work_dir = Path(project["projectPath"]).parent / "staging" / "tasks" / imported["id"]
+    import_request = json.loads((import_work_dir / "request.json").read_text(encoding="utf-8"))
+    assert imported["kind"] == "import"
+    assert import_request["protocolVersion"] == 3
+    assert import_request["kind"] == "raster_import"
+    assert import_request["payload"] == {
+        "sourcePath": str(source.resolve()), "datasetId": imported["datasetId"]
+    }
+    cancelled = manager.cancel({"path": project["projectPath"], "taskId": imported["id"]})
+    assert cancelled["status"] == "cancelled"
+    assert not import_work_dir.exists()
+
+    raster = _raster_dataset()
+    publication_id = str(uuid.uuid4())
+    _stage_import(project, workspace, raster, publication_id)
+    workspace.complete_import_publication(publication_id)
+    destination = tmp_path / "copy.TIFF"
+    exported = manager.start_export(
+        {"path": project["projectPath"], "datasetId": raster["id"], "destination": str(destination)}
+    )
+    export_request = json.loads(
+        (Path(project["projectPath"]).parent / "staging" / "tasks" / exported["id"] / "request.json").read_text()
+    )
+    assert export_request["protocolVersion"] == 3
+    assert export_request["kind"] == "raster_export"
+    assert export_request["payload"]["dataset"] == raster
+    assert export_request["payload"]["managedPath"].endswith(f"rasters\\{raster['id']}.tif")
+    manager.cancel({"path": project["projectPath"], "taskId": exported["id"]})
+
+    with pytest.raises(InvalidParamsError):
+        manager.start_export(
+            {"path": project["projectPath"], "datasetId": raster["id"], "destination": str(tmp_path / "wrong.gpkg")}
+        )
+    projects.close()
+
+
+def test_raster_export_rejects_existing_destination_sidecars_without_modifying_them(tmp_path: Path) -> None:
+    projects, project, workspace = _stores(tmp_path)
+    raster = _raster_dataset()
+    publication_id = str(uuid.uuid4())
+    _stage_import(project, workspace, raster, publication_id)
+    workspace.complete_import_publication(publication_id)
+    destination = tmp_path / "copy.tif"
+    sidecar = Path(str(destination) + ".aux.xml")
+    sidecar.write_text("existing sidecar", encoding="utf-8")
+    manager = TaskManager(projects, workspace)
+
+    with pytest.raises(DomainError) as error:
+        manager.start_export(
+            {"path": project["projectPath"], "datasetId": raster["id"], "destination": str(destination)}
+        )
+
+    assert error.value.kind == "external_raster_dependencies"
+    assert sidecar.read_text(encoding="utf-8") == "existing sidecar"
+    assert not destination.exists()
+    assert workspace.running_task() is None
+    projects.close()
+
+
+def test_raster_export_rechecks_destination_sidecars_during_publication(tmp_path: Path) -> None:
+    projects, project, workspace = _stores(tmp_path)
+    raster = _raster_dataset()
+    publication_id = str(uuid.uuid4())
+    _stage_import(project, workspace, raster, publication_id)
+    workspace.complete_import_publication(publication_id)
+    destination = (tmp_path / "copy.tif").resolve()
+    task = workspace.create_task("export", dataset_id=raster["id"], destination=str(destination))
+    temporary = destination.with_name(f".{destination.name}.{task['id']}.pending")
+    temporary.write_bytes(b"verified raster export")
+    workspace.prepare_export_publication(task["id"], temporary)
+
+    sidecar = Path(str(destination) + ".aux.xml")
+    sidecar.write_text("existing sidecar", encoding="utf-8")
+    with pytest.raises(DomainError) as error:
+        workspace.complete_export_publication(task["id"])
+
+    assert error.value.kind == "external_raster_dependencies"
+    assert not destination.exists()
+    assert sidecar.read_text(encoding="utf-8") == "existing sidecar"
+    assert temporary.read_bytes() == b"verified raster export"
+    assert workspace.has_pending(task["id"])
+
+    projects.close()
+    reopened = ProjectStore()
+    reopened.open({"path": project["projectPath"]})
+    recovered_workspace = WorkspaceStore(reopened)
+    recovered = recovered_workspace.get({"path": project["projectPath"]})
+    recovered_task = next(item for item in recovered["tasks"] if item["id"] == task["id"])
+    assert recovered_task["status"] == "interrupted"
+    assert recovered_task["stage"] == "publication_pending"
+    assert recovered_workspace.has_pending(task["id"])
+    assert temporary.read_bytes() == b"verified raster export"
+    assert sidecar.read_text(encoding="utf-8") == "existing sidecar"
+    reopened.close()
 
 
 def test_table_import_and_points_complete_through_real_worker(tmp_path: Path) -> None:
@@ -482,6 +770,42 @@ def test_table_import_and_points_complete_through_real_worker(tmp_path: Path) ->
     projects.close()
 
 
+def test_raster_import_and_export_complete_through_real_worker(tmp_path: Path) -> None:
+    projects, project, workspace = _stores(tmp_path)
+    manager = TaskManager(projects, workspace)
+    source = Path(create_raster_fixture_bundle(tmp_path / "sources")["dem"])
+    source_bytes = source.read_bytes()
+
+    imported = manager.start_raster_import(
+        {"path": project["projectPath"], "sourcePath": str(source)}
+    )
+    deadline = time.monotonic() + 20
+    while imported["status"] == "running" and time.monotonic() < deadline:
+        time.sleep(0.05)
+        imported = manager.get({"path": project["projectPath"], "taskId": imported["id"]})
+    assert imported["status"] == "completed", imported
+
+    dataset = workspace.dataset(project["projectPath"], imported["datasetId"])
+    assert dataset["kind"] == "raster"
+    assert dataset["version"] == hashlib.sha256(source_bytes).hexdigest()
+    assert workspace.managed_path(dataset).read_bytes() == source_bytes
+
+    destination = tmp_path / "exported.tiff"
+    exported = manager.start_export(
+        {"path": project["projectPath"], "datasetId": dataset["id"], "destination": str(destination)}
+    )
+    deadline = time.monotonic() + 20
+    while exported["status"] == "running" and time.monotonic() < deadline:
+        time.sleep(0.05)
+        exported = manager.get({"path": project["projectPath"], "taskId": exported["id"]})
+    assert exported["status"] == "completed", exported
+    assert destination.read_bytes() == source_bytes
+    assert not destination.with_name(f".{destination.name}.{exported['id']}.pending").exists()
+
+    manager.close()
+    projects.close()
+
+
 def test_worker_rejects_malformed_request_without_stdout(tmp_path: Path, capsys) -> None:
     from spatial_engine.worker import run_worker
 
@@ -511,7 +835,7 @@ def test_worker_does_not_delete_colliding_export_pending_file(tmp_path: Path, mo
     request.write_text(
         json.dumps(
             {
-                "protocolVersion": 2,
+                "protocolVersion": 3,
                 "taskId": task_id,
                 "kind": "export",
                 "payload": {},
@@ -556,7 +880,7 @@ def test_worker_retries_transient_windows_progress_replace(tmp_path: Path, monke
     request.write_text(
         json.dumps(
             {
-                "protocolVersion": 2,
+                "protocolVersion": 3,
                 "taskId": task_id,
                 "kind": "import",
                 "payload": {},
@@ -570,3 +894,55 @@ def test_worker_retries_transient_windows_progress_replace(tmp_path: Path, monke
     assert worker.run_worker(request) == 0
     assert attempts >= 3
     assert json.loads((work_dir / "progress.json").read_text(encoding="utf-8"))["stage"] == "reading"
+
+
+def test_worker_dispatches_raster_operations_with_exact_artifacts(tmp_path: Path, monkeypatch) -> None:
+    from spatial_engine import rasters
+    from spatial_engine.worker import run_worker
+
+    calls: list[tuple[str, dict]] = []
+
+    def fake_import(payload, work_dir, progress, cancelled):
+        calls.append(("import", payload))
+        artifact = work_dir / "snapshot.tif"
+        artifact.write_bytes(b"raster snapshot")
+        return {"dataset": _raster_dataset(payload["datasetId"]), "artifactPath": str(artifact)}
+
+    def fake_export(payload, work_dir, progress, cancelled):
+        calls.append(("export", payload))
+        artifact = work_dir / "export.tif"
+        artifact.write_bytes(b"raster export")
+        return {"artifactPath": str(artifact)}
+
+    monkeypatch.setattr(rasters, "import_raster", fake_import)
+    monkeypatch.setattr(rasters, "export_raster", fake_export)
+
+    import_id = str(uuid.uuid4())
+    import_dir = tmp_path / import_id
+    import_dir.mkdir()
+    import_request = import_dir / "request.json"
+    import_payload = {"sourcePath": str(tmp_path / "source.tif"), "datasetId": str(uuid.uuid4())}
+    import_request.write_text(json.dumps({
+        "protocolVersion": 3, "taskId": import_id, "kind": "raster_import", "payload": import_payload,
+        "workDir": str(import_dir), "publishPath": None,
+    }), encoding="utf-8")
+    assert run_worker(import_request) == 0
+    assert calls == [("import", import_payload)]
+    import_result = json.loads((import_dir / "result.json").read_text(encoding="utf-8"))
+    assert Path(import_result["result"]["artifactPath"]).name == "snapshot.tif"
+
+    export_id = str(uuid.uuid4())
+    export_dir = tmp_path / export_id
+    export_dir.mkdir()
+    export_request = export_dir / "request.json"
+    export_payload = {"dataset": _raster_dataset(), "managedPath": str(tmp_path / "managed.tif")}
+    pending = tmp_path / f".out.tif.{export_id}.pending"
+    export_request.write_text(json.dumps({
+        "protocolVersion": 3, "taskId": export_id, "kind": "raster_export", "payload": export_payload,
+        "workDir": str(export_dir), "publishPath": str(pending),
+    }), encoding="utf-8")
+    assert run_worker(export_request) == 0
+    assert calls[-1] == ("export", export_payload)
+    assert pending.read_bytes() == b"raster export"
+    export_result = json.loads((export_dir / "result.json").read_text(encoding="utf-8"))
+    assert Path(export_result["result"]["artifactPath"]).name == "export.tif"

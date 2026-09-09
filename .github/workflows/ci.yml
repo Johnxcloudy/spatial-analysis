@@ -63,6 +63,9 @@ jobs:
       - name: Verify coordinate tables through persistent RPC
         run: uv run --project gis-engine --frozen python scripts/verify-tables.py --output .artifacts/tables-source-ci
 
+      - name: Verify GeoTIFF workflow through persistent RPC
+        run: uv run --project gis-engine --frozen python scripts/verify-rasters.py --output .artifacts/rasters-source-ci
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all -- --check
 
@@ -78,10 +81,12 @@ jobs:
           ./scripts/smoke-engine.ps1 -Executable $engine -OutputDirectory '.artifacts/frozen-engine/ci'
           uv run --project gis-engine --frozen python scripts/verify-vectors.py --executable $engine --output .artifacts/vectors-frozen-ci --fixtures .artifacts/vector-fixtures/manifest.json
           uv run --project gis-engine --frozen python scripts/verify-tables.py --executable $engine --output .artifacts/tables-frozen-ci
+          uv run --project gis-engine --frozen python scripts/verify-rasters.py --executable $engine --output .artifacts/rasters-frozen-ci
 
       - name: Build Windows installer
         run: npm run tauri -- build
 
+      # Host/RPC smoke only; local WebView2 UI/canvas acceptance is recorded separately.
       - name: Smoke test native executable
         run: |
           $executable = (Resolve-Path 'apps/desktop/src-tauri/target/release/spatial-analysis-desktop.exe').Path
@@ -116,4 +121,6 @@ jobs:
             .artifacts/vectors-*/**/*.log
             .artifacts/tables-*/**/*.json
             .artifacts/tables-*/**/*.log
+            .artifacts/rasters-*/**/*.json
+            .artifacts/rasters-*/**/*.log
             ${{ runner.temp }}/spatial-analysis-native-*/**/*.json

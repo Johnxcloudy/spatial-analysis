@@ -31,6 +31,9 @@ def library_versions() -> dict[str, str]:
         "numpy": metadata.version("numpy"),
         "pyarrow": pyarrow.__version__,
         "openpyxl": openpyxl.__version__,
+        "affine": metadata.version("affine"),
+        "rasterio_gdal": rasterio.__gdal_version__,
+        "rasterio_proj": rasterio.__proj_version__,
     }
 
 
@@ -60,7 +63,7 @@ def driver_capabilities() -> dict[str, str]:
 
 def runtime_info() -> dict:
     return {
-        "protocolVersion": 3,
+        "protocolVersion": 4,
         "engineVersion": __version__,
         "pythonVersion": platform.python_version(),
         "packaged": bool(getattr(sys, "frozen", False)),

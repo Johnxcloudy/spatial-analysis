@@ -2,7 +2,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { appCacheDir, dirname, join } from '@tauri-apps/api/path';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import type { AttributePage, EngineError, EngineMethod, FeatureResult, MapLayer, ProbeReport, Project, RuntimeInfo, SourceInspection, TableInspection, Task, ViewportResult, Workspace } from '../../../shared/contracts';
+import type { AttributePage, EngineError, EngineMethod, FeatureResult, MapLayer, ProbeReport, Project, RasterInspection, RasterRenderResult, RasterSampleResult, RuntimeInfo, SourceInspection, TableInspection, Task, ViewportResult, Workspace } from '../../../shared/contracts';
 
 interface EngineResults {
   'runtime.info': RuntimeInfo;
@@ -20,6 +20,11 @@ interface EngineResults {
   'table.export': Task;
   'table.points': Task;
   'table.page': AttributePage;
+  'raster.inspect': RasterInspection;
+  'raster.import': Task;
+  'raster.export': Task;
+  'raster.render': RasterRenderResult;
+  'raster.sample': RasterSampleResult;
   'task.get': Task;
   'task.cancel': Task;
   'layer.update': MapLayer;
@@ -71,6 +76,8 @@ export const desktop = {
   chooseVector: () => open({ multiple: false, directory: false, title: '导入矢量数据', filters: [{ name: '矢量数据', extensions: ['gpkg', 'shp', 'geojson', 'json'] }] }),
   chooseGdb: () => open({ multiple: false, directory: true, title: '选择 File Geodatabase (.gdb)' }),
   selectTableSource: () => open({ multiple: false, directory: false, title: '导入坐标表', filters: [{ name: '坐标表', extensions: ['csv', 'xlsx'] }] }),
+  chooseRaster: () => open({ multiple: false, directory: false, title: '导入 GeoTIFF', filters: [{ name: 'GeoTIFF', extensions: ['tif', 'tiff'] }] }),
+  chooseRasterExport: (name: string) => save({ title: '导出 GeoTIFF', defaultPath: `${name.replace(/[<>:"/\\|?*]/g, '_')}.tif`, filters: [{ name: 'GeoTIFF', extensions: ['tif', 'tiff'] }] }),
   chooseExport: (name: string) => save({ title: '导出 GeoPackage', defaultPath: `${name.replace(/[<>:"/\\|?*]/g, '_')}.gpkg`, filters: [{ name: 'GeoPackage', extensions: ['gpkg'] }] }),
   join,
   diagnosticDirectory: async (projectPath?: string) => projectPath

@@ -12,7 +12,7 @@ vi.mock('./components/VectorMap', () => ({
   VectorMap: ({ onSelect, selected, fitRequest, initialView, onViewChange }: { onSelect: (layer: string, id: string) => void; selected: FeatureResult | null; fitRequest: FitRequest | null; initialView: ViewState; onViewChange: (view: ViewState) => void }) => <div><button onClick={() => onSelect('layer-2', '2')}>Select second map layer</button><button onClick={() => onViewChange({ center: [110, 30], zoom: 7 })}>Pan map</button><span data-testid="highlight">{selected?.row.id ?? ''}</span><span data-testid="map-fit">{fitRequest?.key ?? ''}</span><span data-testid="initial-view">{JSON.stringify(initialView)}</span></div>,
 }));
 
-const project: Project = { id: 'project-1', name: 'Vector test', description: '', schemaVersion: 3, createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z', projectPath: 'C:/test/project.spa', analysisCrs: null, displayCrs: 'EPSG:3857', viewState: { center: [114, 27], zoom: 5 } };
+const project: Project = { id: 'project-1', name: 'Vector test', description: '', schemaVersion: 4, createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z', projectPath: 'C:/test/project.spa', analysisCrs: null, displayCrs: 'EPSG:3857', viewState: { center: [114, 27], zoom: 5 } };
 const dataset: VectorDataset = {
   id: 'dataset-1', version: 'version-1', name: 'Land', kind: 'vector',
   source: { path: 'C:/test/land.gpkg', layer: 'land', driver: 'GPKG', fingerprint: 'fixture', encoding: null, assignedCrs: null, crsWkt: 'fixture-crs', metadata: {} },
@@ -38,6 +38,7 @@ function fixtureBridge(request: DesktopBridge['request']): DesktopBridge {
     available: () => true, request, chooseParent: vi.fn(async () => 'C:/test'), chooseProject: vi.fn(async () => project.projectPath),
     chooseVector: vi.fn(async () => 'C:/test/land.gpkg'), chooseGdb: vi.fn(async () => 'C:/test/land.gdb'), chooseExport: vi.fn(async () => 'C:/test/export.gpkg'),
     selectTableSource: vi.fn(async () => 'C:/test/points.csv'),
+    chooseRaster: vi.fn(async () => 'C:/test/image.tif'), chooseRasterExport: vi.fn(async () => 'C:/test/export.tif'),
     join: vi.fn(async (...parts) => parts.join('/')), diagnosticDirectory: vi.fn(async () => 'C:/test/cache'), onClose: vi.fn(async () => () => undefined), closeWindow: vi.fn(async () => undefined),
   };
 }
@@ -103,7 +104,7 @@ describe('vector query consistency', () => {
 async function openWorkspace(deferredSecond?: ReturnType<typeof deferred<FeatureResult>>, fitRequest: FitRequest | null = null) {
   const request = vi.fn(async (method: string, params: Record<string, unknown> = {}) => {
     switch (method) {
-      case 'runtime.info': return { protocolVersion: 3, engineVersion: '0.3.0', pythonVersion: 'test', packaged: false, versions: {}, drivers: {}, logPath: 'test' };
+      case 'runtime.info': return { protocolVersion: 4, engineVersion: '0.4.0', pythonVersion: 'test', packaged: false, versions: {}, drivers: {}, logPath: 'test' };
       case 'project.open': return project;
       case 'workspace.get': return workspace;
       case 'vector.page':

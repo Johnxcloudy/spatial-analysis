@@ -5,13 +5,16 @@ import View from 'ol/View';
 import GeoJSON from 'ol/format/GeoJSON';
 import VectorLayer from 'ol/layer/Vector';
 import VectorSource from 'ol/source/Vector';
+import ImageLayer from 'ol/layer/Image';
+import ImageStatic from 'ol/source/ImageStatic';
 import { Circle as CircleStyle, Fill, Stroke, Style } from 'ol/style';
 import { fromLonLat, toLonLat, transformExtent } from 'ol/proj';
 import { ScaleLine } from 'ol/control';
-import type { Bounds, FeatureResult, FieldValue, MapLayer, VectorDataset, ViewState } from '../../../../shared/contracts';
+import type { Bounds, FeatureResult, FieldValue, MapLayer, RasterDataset, VectorDataset, ViewState } from '../../../../shared/contracts';
 import type { DesktopBridge } from '../bridge';
 import { normalizeError } from '../bridge';
 import { categoryColor, translucent } from '../vector-style';
+import { createRasterRenderer, rasterFrame, type RasterFrame } from '../raster-display';
 
 export interface FitRequest { key: number; bounds: Bounds }
 
@@ -29,33 +32,43 @@ function geographicBounds(map: Map): Bounds | null {
   return result.every(Number.isFinite) && result[0] < result[2] && result[1] < result[3] ? result : null;
 }
 
-export function VectorMap({ bridge, path, layers, datasets, initialView, enabled, selected, fitRequest, onSelect, onViewChange, onFailure }: {
+export function VectorMap({ bridge, path, layers, datasets, initialView, enabled, selected, fitRequest, onSelect, onSelectPixel, onViewChange, onFailure }: {
   bridge: DesktopBridge;
   path?: string;
   layers: MapLayer[];
-  datasets: VectorDataset[];
+  datasets: (VectorDataset | RasterDataset)[];
   initialView: ViewState;
   enabled: boolean;
   selected: FeatureResult | null;
   fitRequest: FitRequest | null;
   onSelect: (layerId: string, featureId: string) => void;
+  onSelectPixel?: (coordinate: [number, number]) => void;
   onViewChange: (view: ViewState) => void;
   onFailure: (cause: unknown) => void;
 }) {
   const target = useRef<HTMLDivElement>(null);
   const instance = useRef<Map | null>(null);
-  const mapLayers = useRef(new globalThis.Map<string, VectorLayer<VectorSource>>());
+  const mapLayers = useRef(new globalThis.Map<string, VectorLayer<VectorSource> | ImageLayer<ImageStatic>>());
+  const rasterQueues = useRef(new globalThis.Map<string, ReturnType<typeof createRasterRenderer>>());
+  const imageRevision = useRef(0);
   const highlight = useRef<VectorSource | null>(null);
-  const callbacks = useRef({ onSelect, onViewChange, onFailure, enabled });
-  callbacks.current = { onSelect, onViewChange, onFailure, enabled };
+  const callbacks = useRef({ onSelect, onSelectPixel, onViewChange, onFailure, enabled });
+  callbacks.current = { onSelect, onSelectPixel, onViewChange, onFailure, enabled };
   const [bbox, setBbox] = useState<Bounds | null>(null);
   const [loading, setLoading] = useState(false);
   const [issues, setIssues] = useState<string[]>([]);
   const [coordinate, setCoordinate] = useState('');
+  const [frame, setFrame] = useState<RasterFrame | null>(null);
+  const [rasterBusy, setRasterBusy] = useState<Set<string>>(() => new Set());
+  const [rasterIssues, setRasterIssues] = useState<Record<string, string>>({});
   const datasetMap = new globalThis.Map(datasets.map((dataset) => [dataset.id, dataset]));
-  const visible = layers.filter((layer) => layer.visible && datasetMap.get(layer.datasetId)?.boundsWgs84);
-  const queryKey = JSON.stringify(visible.map((layer) => [layer.id, layer.datasetId, datasetMap.get(layer.datasetId)?.version, layer.categoryField]));
+  const visible = layers.filter((layer) => layer.visible && datasetMap.get(layer.datasetId)?.boundsWgs84 && datasetMap.get(layer.datasetId)?.crsWkt);
+  const vectorLayers = visible.filter((layer) => datasetMap.get(layer.datasetId)?.kind === 'vector');
+  const rasterLayers = visible.filter((layer) => datasetMap.get(layer.datasetId)?.kind === 'raster');
+  const queryKey = JSON.stringify(vectorLayers.map((layer) => [layer.id, layer.datasetId, datasetMap.get(layer.datasetId)?.version, layer.categoryField]));
+  const rasterKey = JSON.stringify(rasterLayers.map((layer) => [layer.id, layer.datasetId, datasetMap.get(layer.datasetId)?.version, layer.rasterStyle]));
   const bboxKey = JSON.stringify(bbox);
+  const frameKey = JSON.stringify(frame);
 
   useEffect(() => {
     if (!target.current) return;
@@ -70,6 +83,8 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
     highlight.current = selectedSource;
     map.on('moveend', () => {
       setBbox(geographicBounds(map));
+      const size = map.getSize();
+      setFrame(size ? rasterFrame(map.getView().calculateExtent(size), size) : null);
       const center = toLonLat(map.getView().getCenter() ?? [0, 0]);
       if (callbacks.current.enabled) callbacks.current.onViewChange({ center: [Number(center[0].toFixed(9)), Number(center[1].toFixed(9))], zoom: Number((map.getView().getZoom() ?? 5).toFixed(6)) });
     });
@@ -79,6 +94,11 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
     });
     map.on('singleclick', (event) => {
       if (!callbacks.current.enabled) return;
+      if (callbacks.current.onSelectPixel) {
+        const coordinate = toLonLat(event.coordinate);
+        callbacks.current.onSelectPixel([coordinate[0], coordinate[1]]);
+        return;
+      }
       map.forEachFeatureAtPixel(event.pixel, (feature, layer) => {
         const layerId = layer?.get('workspaceLayerId') as string | undefined;
         const id = feature.getId();
@@ -86,30 +106,32 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
         return undefined;
       }, { hitTolerance: 5 });
     });
-    const resize = () => { map.updateSize(); setBbox(geographicBounds(map)); };
+    const resize = () => { map.updateSize(); setBbox(geographicBounds(map)); const size = map.getSize(); setFrame(size ? rasterFrame(map.getView().calculateExtent(size), size) : null); };
     const observer = new ResizeObserver(resize);
     observer.observe(target.current);
     resize();
-    return () => { observer.disconnect(); map.dispose(); instance.current = null; highlight.current = null; mapLayers.current.clear(); };
+    return () => { observer.disconnect(); for (const queue of rasterQueues.current.values()) queue.dispose(); rasterQueues.current.clear(); map.dispose(); instance.current = null; highlight.current = null; mapLayers.current.clear(); };
   }, []);
 
   useEffect(() => {
     const map = instance.current;
     if (!map) return;
     for (const [id, layer] of mapLayers.current) {
-      if (!layers.some((item) => item.id === id)) { map.removeLayer(layer); mapLayers.current.delete(id); }
+      if (!layers.some((item) => item.id === id)) { map.removeLayer(layer); mapLayers.current.delete(id); rasterQueues.current.get(id)?.clear(); rasterQueues.current.get(id)?.dispose(); rasterQueues.current.delete(id); }
     }
     layers.forEach((definition, index) => {
+      const dataset = datasetMap.get(definition.datasetId);
       let layer = mapLayers.current.get(definition.id);
       if (!layer) {
-        layer = new VectorLayer({ source: new VectorSource({ wrapX: false }) });
+        layer = dataset?.kind === 'raster' ? new ImageLayer<ImageStatic>() : new VectorLayer({ source: new VectorSource({ wrapX: false }) });
         layer.set('workspaceLayerId', definition.id);
         mapLayers.current.set(definition.id, layer);
         map.addLayer(layer);
       }
-      layer.setVisible(definition.visible && !!datasetMap.get(definition.datasetId)?.boundsWgs84);
+      layer.setVisible(definition.visible && !!dataset?.boundsWgs84 && !!dataset?.crsWkt);
       layer.setOpacity(definition.opacity);
       layer.setZIndex(layers.length - index);
+      if (!(layer instanceof VectorLayer)) return;
       const styles = new globalThis.Map<string, Style>();
       layer.setStyle((feature) => {
         const color = categoryColor(definition, definition.categoryField ? feature.get(definition.categoryField) as FieldValue : undefined);
@@ -123,26 +145,28 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
     let cancelled = false;
     setIssues([]);
     setLoading(false);
-    if (!enabled || !path || !bbox || !visible.length) return;
+    if (!enabled || !path || !bbox || !vectorLayers.length) return;
     const timer = setTimeout(() => {
       setLoading(true);
       void (async () => {
         const notices: string[] = [];
-        for (const layer of visible) {
+        for (const layer of vectorLayers) {
           if (cancelled) return;
           try {
             const dataset = datasetMap.get(layer.datasetId)!;
             const result = await bridge.request('vector.viewport', { path, datasetId: dataset.id, bbox, limit: 2000, propertyFields: layer.categoryField ? [layer.categoryField] : [] });
             if (cancelled) return;
             if (result.datasetId !== dataset.id || result.version !== dataset.version) throw new Error('显示数据版本不匹配，请刷新工作区。');
-            const source = mapLayers.current.get(layer.id)?.getSource();
+            const displayLayer = mapLayers.current.get(layer.id);
+            const source = displayLayer instanceof VectorLayer ? displayLayer.getSource() : null;
             const features = new GeoJSON().readFeatures(result.collection, { dataProjection: 'EPSG:4326', featureProjection: 'EPSG:3857' });
             source?.clear();
             source?.addFeatures(features);
             if (result.truncated) notices.push(`${layer.name}：当前显示 ${result.returnedCount} 个要素，结果已截断`);
           } catch (cause) {
             if (cancelled) return;
-            mapLayers.current.get(layer.id)?.getSource()?.clear();
+            const displayLayer = mapLayers.current.get(layer.id);
+            if (displayLayer instanceof VectorLayer) displayLayer.getSource()?.clear();
             notices.push(`${layer.name}：${normalizeError(cause).message}`);
             if (normalizeError(cause).data?.kind?.startsWith('ENGINE_')) callbacks.current.onFailure(cause);
           }
@@ -152,6 +176,41 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
     }, 180);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [bridge, path, queryKey, bboxKey, enabled]);
+
+  useEffect(() => {
+    setRasterIssues({});
+    if (!enabled || !path || !frame) return;
+    const timer = setTimeout(() => {
+      for (const definition of rasterLayers) {
+        const dataset = datasetMap.get(definition.datasetId);
+        if (dataset?.kind !== 'raster' || !definition.rasterStyle) continue;
+        let queue = rasterQueues.current.get(definition.id);
+        if (!queue) {
+          queue = createRasterRenderer(bridge, {
+            result: (result) => {
+              const layer = mapLayers.current.get(definition.id);
+              if (!(layer instanceof ImageLayer)) return;
+              const revision = imageRevision.current;
+              const source = new ImageStatic({ url: `data:image/png;base64,${result.imageBase64}`, projection: 'EPSG:3857', imageExtent: result.bbox, interpolate: false });
+              source.once('imageloaderror', () => { if (revision === imageRevision.current && mapLayers.current.get(definition.id) === layer && layer.getSource() === source) { layer.setSource(null); setRasterIssues((current) => ({ ...current, [definition.id]: `${definition.name}：显示图像无法解码` })); } });
+              layer.setSource(source);
+            },
+            error: (cause) => {
+              const layer = mapLayers.current.get(definition.id);
+              if (layer instanceof ImageLayer) layer.setSource(null);
+              const failure = normalizeError(cause);
+              setRasterIssues((current) => ({ ...current, [definition.id]: `${definition.name}：${failure.message}` }));
+              if (failure.data?.kind?.startsWith('ENGINE_')) callbacks.current.onFailure(cause);
+            },
+            busy: (busy) => setRasterBusy((current) => { const next = new Set(current); if (busy) next.add(definition.id); else next.delete(definition.id); return next; }),
+          });
+          rasterQueues.current.set(definition.id, queue);
+        }
+        queue.push({ path, datasetId: dataset.id, version: dataset.version, ...frame, style: definition.rasterStyle });
+      }
+    }, 180);
+    return () => { imageRevision.current += 1; clearTimeout(timer); for (const queue of rasterQueues.current.values()) queue.clear(); };
+  }, [bridge, path, rasterKey, frameKey, enabled]);
 
   useEffect(() => {
     highlight.current?.clear();
@@ -171,11 +230,11 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
 
   const zoom = (amount: number) => { const view = instance.current?.getView(); if (view) view.animate({ zoom: (view.getZoom() ?? 5) + amount, duration: 150 }); };
   return <div className="vector-map" data-testid="vector-map">
-    <div className="map-target" ref={target} tabIndex={0} aria-label="矢量地图" />
+    <div className="map-target" ref={target} tabIndex={0} aria-label="地图" />
     {!visible.length && <div className="map-empty"><Crosshair size={30} strokeWidth={1.3} /><span>{layers.length ? '没有可显示的图层' : '未添加图层'}</span></div>}
     <div className="map-controls"><button className="icon-button" aria-label="地图放大" title="地图放大" onClick={() => zoom(1)}><Plus size={18} /></button><button className="icon-button" aria-label="地图缩小" title="地图缩小" onClick={() => zoom(-1)}><Minus size={18} /></button></div>
-    {loading && <span className="map-loading" role="status">读取显示数据</span>}
-    {!!issues.length && <div className="map-notices" role="status"><AlertTriangle size={15} /><div>{issues.map((issue) => <p key={issue}>{issue}</p>)}</div></div>}
+    {(loading || !!rasterBusy.size) && <span className="map-loading" role="status">读取显示数据</span>}
+    {!!(issues.length + Object.keys(rasterIssues).length) && <div className="map-notices" role="status"><AlertTriangle size={15} /><div>{[...issues, ...Object.values(rasterIssues)].map((issue) => <p key={issue}>{issue}</p>)}</div></div>}
     <div className="map-coordinate">{coordinate || '显示 CRS：EPSG:3857'}</div>
   </div>;
 }

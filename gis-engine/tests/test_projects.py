@@ -30,7 +30,7 @@ def test_project_create_save_close_open_round_trip(tmp_path: Path) -> None:
     project_dir = tmp_path / "含空格 project"
 
     created = engine.dispatch("project.create", {"directory": str(project_dir), "name": "Land study"})
-    assert created["schemaVersion"] == 3
+    assert created["schemaVersion"] == 4
     assert created["name"] == "Land study"
     assert created["description"] == ""
     assert created["analysisCrs"] is None
@@ -189,7 +189,7 @@ def test_open_migrates_v1_after_creating_a_valid_backup(tmp_path: Path) -> None:
 
     opened = Engine().dispatch("project.open", {"path": str(project_path)})
 
-    assert opened["schemaVersion"] == 3
+    assert opened["schemaVersion"] == 4
     backups = list((project_path.parent / "backups").glob("*.spa"))
     assert len(backups) == 1
     with sqlite3.connect(backups[0]) as backup:
@@ -210,12 +210,12 @@ def test_failed_migration_rolls_back_releases_lock_and_keeps_active_project(
     with sqlite3.connect(legacy_path) as connection:
         connection.execute("PRAGMA user_version = 1")
 
-    real_migrate = project_module._migrate_to_v3
+    real_migrate = project_module._migrate_to_v4
 
     def fail_migration(path: Path, source_version: int) -> None:
         raise sqlite3.OperationalError("injected migration failure")
 
-    monkeypatch.setattr(project_module, "_migrate_to_v3", fail_migration)
+    monkeypatch.setattr(project_module, "_migrate_to_v4", fail_migration)
     with pytest.raises(DomainError) as error:
         engine.dispatch("project.open", {"path": str(legacy_path)})
     assert error.value.kind == "project_migration_failed"
@@ -223,9 +223,9 @@ def test_failed_migration_rolls_back_releases_lock_and_keeps_active_project(
     with sqlite3.connect(legacy_path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
 
-    monkeypatch.setattr(project_module, "_migrate_to_v3", real_migrate)
+    monkeypatch.setattr(project_module, "_migrate_to_v4", real_migrate)
     contender = Engine()
-    assert contender.dispatch("project.open", {"path": str(legacy_path)})["schemaVersion"] == 3
+    assert contender.dispatch("project.open", {"path": str(legacy_path)})["schemaVersion"] == 4
     contender.close()
 
 
@@ -279,7 +279,7 @@ def test_open_migrates_v2_registry_tasks_and_layers_with_v2_backup(tmp_path: Pat
 
     opener = Engine()
     opened = opener.dispatch("project.open", {"path": str(project_path)})
-    assert opened["schemaVersion"] == 3
+    assert opened["schemaVersion"] == 4
     with sqlite3.connect(project_path) as connection:
         assert connection.execute("SELECT dataset_id FROM datasets").fetchone()[0] == dataset_id
         assert connection.execute("SELECT layer_id FROM map_layers").fetchone()[0] == layer_id
@@ -294,6 +294,76 @@ def test_open_migrates_v2_registry_tasks_and_layers_with_v2_backup(tmp_path: Pat
     with sqlite3.connect(backups[0]) as backup:
         assert backup.execute("PRAGMA user_version").fetchone()[0] == 2
         assert backup.execute("SELECT dataset_id FROM vector_datasets").fetchone()[0] == dataset_id
+    opener.close()
+
+
+def test_open_migrates_v3_datasets_tasks_layers_and_journals_with_backup(tmp_path: Path) -> None:
+    creator = Engine()
+    created = creator.dispatch("project.create", {"directory": str(tmp_path / "v3"), "name": "Version three"})
+    creator.close()
+    project_path = Path(created["projectPath"])
+    vector_id = "00000000-0000-0000-0000-000000000011"
+    table_id = "00000000-0000-0000-0000-000000000012"
+    layer_id = "00000000-0000-0000-0000-000000000013"
+    import_task = "00000000-0000-0000-0000-000000000014"
+    export_task = "00000000-0000-0000-0000-000000000015"
+    points_task = "00000000-0000-0000-0000-000000000016"
+    with sqlite3.connect(project_path) as connection:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("DROP TABLE map_layers")
+        project_module._create_v3_schema(connection)
+        connection.executemany(
+            "INSERT INTO datasets VALUES (?, ?, ?, ?, ?)",
+            [
+                (vector_id, "0" * 64, f"datasets/{vector_id}.gpkg", '{"kind":"vector"}', "2026-09-09T00:00:00Z"),
+                (table_id, "1" * 64, f"datasets/{table_id}.gpkg", '{"kind":"table"}', "2026-09-09T00:00:01Z"),
+            ],
+        )
+        connection.execute(
+            "INSERT INTO map_layers VALUES (?, ?, 'Vector', 1, 0.75, '#123456', 'code', '{\"A\":\"#ABCDEF\"}', 0)",
+            (layer_id, vector_id),
+        )
+        rows = [
+            (import_task, "import", table_id, None),
+            (export_task, "export", vector_id, str(tmp_path / "export.gpkg")),
+            (points_task, "points", vector_id, None),
+        ]
+        for task_id, kind, dataset_id, destination in rows:
+            connection.execute(
+                "INSERT INTO tasks VALUES (?, ?, 'running', 'publishing', 1, 1, ?, ?, ?, ?, NULL)",
+                (task_id, kind, "2026-09-09T00:00:02Z", "2026-09-09T00:00:03Z", dataset_id, destination),
+            )
+        connection.execute(
+            "INSERT INTO pending_publications VALUES (?, ?, ?, ?, ?, ?)",
+            (import_task, '{"kind":"table"}', f"staging/tasks/{import_task}/snapshot.gpkg", f"datasets/{table_id}.gpkg", 1, "0" * 64),
+        )
+        connection.execute(
+            "INSERT INTO pending_exports VALUES (?, ?, ?, ?, ?)",
+            (export_task, str(tmp_path / ".export.pending"), str(tmp_path / "export.gpkg"), 1, "1" * 64),
+        )
+        connection.execute("PRAGMA user_version = 3")
+
+    opener = Engine()
+    opened = opener.dispatch("project.open", {"path": str(project_path)})
+
+    assert opened["schemaVersion"] == 4
+    with sqlite3.connect(project_path) as connection:
+        assert connection.execute("SELECT dataset_id FROM datasets ORDER BY dataset_id").fetchall() == [(vector_id,), (table_id,)]
+        assert connection.execute("SELECT layer_id, raster_style FROM map_layers").fetchone() == (layer_id, None)
+        assert connection.execute("SELECT task_id, kind FROM tasks ORDER BY task_id").fetchall() == [
+            (import_task, "import"), (export_task, "export"), (points_task, "points")
+        ]
+        assert connection.execute("SELECT task_id FROM pending_publications").fetchone() == (import_task,)
+        assert connection.execute("SELECT task_id FROM pending_exports").fetchone() == (export_task,)
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    backups = list((project_path.parent / "backups").glob("project-v3-*.spa"))
+    assert len(backups) == 1
+    with sqlite3.connect(backups[0]) as backup:
+        assert backup.execute("PRAGMA user_version").fetchone() == (3,)
+        assert {row[1] for row in backup.execute("PRAGMA table_info(map_layers)")} == {
+            "layer_id", "dataset_id", "name", "visible", "opacity", "color", "category_field",
+            "category_colors", "display_order",
+        }
     opener.close()
 
 

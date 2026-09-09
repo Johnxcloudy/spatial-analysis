@@ -41,6 +41,11 @@ pub fn validate_request(method: &str, params: &Value) -> Result<(), EngineError>
             | "table.export"
             | "table.page"
             | "table.points"
+            | "raster.inspect"
+            | "raster.import"
+            | "raster.export"
+            | "raster.render"
+            | "raster.sample"
             | "task.get"
             | "task.cancel"
             | "layer.update"
@@ -120,11 +125,40 @@ mod tests {
     }
 
     #[test]
+    fn accepts_raster_workflow_methods() {
+        for method in [
+            "raster.inspect",
+            "raster.import",
+            "raster.export",
+            "raster.render",
+            "raster.sample",
+        ] {
+            assert!(validate_request(method, &json!({})).is_ok(), "{method}");
+        }
+    }
+
+    #[test]
     fn unwraps_matching_response() {
         assert_eq!(
             decode_response(json!({"jsonrpc":"2.0","id":7,"result":{"ok":true}}), 7).unwrap(),
             json!({"ok":true})
         );
+    }
+
+    #[test]
+    fn preserves_source_coordinate_bits_through_json_bridge() {
+        let coordinate = [113.18817495670176_f64, 27.212537530730106_f64];
+        let bytes = serde_json::to_vec(&json!({
+            "jsonrpc": "2.0", "id": 7, "result": {"coordinate": coordinate}
+        }))
+        .unwrap();
+        let result = decode_response(serde_json::from_slice(&bytes).unwrap(), 7).unwrap();
+        for (index, expected) in coordinate.iter().enumerate() {
+            assert_eq!(
+                result["coordinate"][index].as_f64().unwrap().to_bits(),
+                expected.to_bits()
+            );
+        }
     }
 
     #[test]

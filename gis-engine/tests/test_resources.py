@@ -66,5 +66,8 @@ def test_rasterio_environment_repairs_proj_path_after_env_enter(tmp_path: Path, 
     monkeypatch.setattr(resources, "resource_root", lambda: package_root)
     monkeypatch.setattr(rasterio, "Env", ResettingEnvironment)
 
-    with resources.rasterio_environment():
+    with resources.rasterio_environment(GDAL_CACHEMAX=8 * 1024 * 1024, GDAL_PAM_ENABLED="NO"):
+        options = rasterio.env.getenv()
+        assert options["GDAL_CACHEMAX"] == 8 * 1024 * 1024
+        assert options["GDAL_PAM_ENABLED"] == "NO"
         assert CRS.from_epsg(4547).to_epsg() == 4547

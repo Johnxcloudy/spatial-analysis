@@ -178,6 +178,7 @@ def run_diagnostics(params: dict) -> dict:
         "versions": library_versions(),
         "reportPath": str(report_path),
         "geopackagePath": str(gpkg_path),
+        "geotiffPath": str(geotiff_path.resolve()),
         "durationMs": int((time.perf_counter() - started) * 1000),
     }
     temporary_report = report_path.with_suffix(".json.tmp")

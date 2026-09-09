@@ -26,8 +26,8 @@ afterAll(() => dialogMethods.forEach((method, index) => {
   else Reflect.deleteProperty(HTMLDialogElement.prototype, method);
 }));
 
-const project: Project = { id: 'tables-project', name: 'Tables', description: '', schemaVersion: 3, createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z', projectPath: 'C:/test/project.spa', analysisCrs: null, displayCrs: 'EPSG:3857', viewState: { center: [114, 27], zoom: 5 } };
-const runtime = { protocolVersion: 3, engineVersion: '0.3.0', pythonVersion: 'test', packaged: false, versions: {}, drivers: {}, logPath: 'test' };
+const project: Project = { id: 'tables-project', name: 'Tables', description: '', schemaVersion: 4, createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z', projectPath: 'C:/test/project.spa', analysisCrs: null, displayCrs: 'EPSG:3857', viewState: { center: [114, 27], zoom: 5 } };
+const runtime = { protocolVersion: 4, engineVersion: '0.4.0', pythonVersion: 'test', packaged: false, versions: {}, drivers: {}, logPath: 'test' };
 const table: TableDataset = {
   id: 'table-1', version: 'table-version', name: 'Coordinates', kind: 'table',
   source: { path: 'C:/test/points.csv', layer: 'records', driver: 'CSV', fingerprint: 'fixture', encoding: 'utf-8-sig', assignedCrs: null, crsWkt: null, metadata: { delimiter: ',' } },
@@ -79,6 +79,7 @@ function fixtureBridge() {
   const bridge: DesktopBridge = {
     available: () => true, request: request as DesktopBridge['request'], chooseParent: vi.fn(async () => 'C:/test'), chooseProject: vi.fn(async () => project.projectPath),
     chooseVector: vi.fn(async () => 'C:/test/land.gpkg'), chooseGdb: vi.fn(async () => 'C:/test/land.gdb'), chooseExport: vi.fn(async () => 'C:/test/export.gpkg'), selectTableSource: vi.fn(async () => tableOptions.sourcePath),
+    chooseRaster: vi.fn(async () => 'C:/test/image.tif'), chooseRasterExport: vi.fn(async () => 'C:/test/export.tif'),
     join: vi.fn(async (...parts) => parts.join('/')), diagnosticDirectory: vi.fn(async () => 'C:/test/cache'), onClose: vi.fn(async () => () => undefined), closeWindow: vi.fn(async () => undefined),
   };
   return { bridge, request, finishTask: () => { completeTask = true; } };
