@@ -4,7 +4,15 @@ Windows-first personal GIS workstation for land-use overlay and area statistics.
 
 ## Current Scope
 
-Phase 1A (0.2.0) is delivered with synthetic acceptance data; see docs/verification-phase-1a.md. The current request adds cartography and optional Agent design assistance to future tasks, documented in docs/cartography-roadmap.md. It authorizes roadmap updates, not implementation of those future features. Phase 1B coordinate tables, 1C rasters, 1D consolidation and Phase 2 land overlay remain the next product milestones. See docs/phase-1a.md and shared/contracts.ts for the implemented contracts.
+Phase 1A (0.2.0) is delivered with synthetic acceptance data; see docs/verification-phase-1a.md. Cartography and optional Agent design assistance are future tasks in docs/cartography-roadmap.md, not implemented capabilities. Phase 1B coordinate tables, 1C rasters, 1D consolidation and Phase 2 land overlay remain the next product milestones. Read the latest user instruction and the handoff summary in 执行说明.md before selecting work. See docs/phase-1a.md and shared/contracts.ts for the implemented contracts.
+
+## Required Stage Closeout
+
+- After every stage, append a factual execution summary to the repository-root 执行说明.md before announcing completion. Include scope/status, delivered work and files, decisions, actual verification evidence, unresolved issues, artifacts, known Git/CI state and prioritized next steps.
+- Refresh its top handoff summary (normally no more than 30 lines) and TODO.md. Keep detailed logs in linked evidence files; preserve historical stage records and distinguish past tests from newly executed checks.
+- Preserve the latest user constraints, approvals, unfinished tasks, dependencies and recovery steps. Do not treat a future roadmap item as already authorized implementation or mark pending verification as passed.
+- After saving the records, invoke context compaction if the host exposes a supported capability. If none is available, explicitly say so and use the saved handoff for recovery; never claim the actual conversation was compacted.
+- On a resumed or compacted session, read the latest user instruction, this file, 执行说明.md's current handoff and TODO.md first. Recheck HEAD, worktree, remote/CI and active processes before relying on recorded transient state.
 
 ## Engineering Rules
 
