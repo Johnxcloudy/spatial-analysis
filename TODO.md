@@ -45,22 +45,25 @@
 为 success，安装器与报告已上传。详细结果与未覆盖环境见
 [Phase 1B 验证记录](docs/verification-phase-1b.md)。
 
-## Phase 1C（功能与本机工作流通过，分发收尾中）
+## Phase 1C（已交付，本机验收与功能代码 CI 通过）
 
 - [x] 用户授权栅格基础，继续使用合成样本。
 - [x] 自包含 GeoTIFF、不可变字节快照、独立 RasterDataset 和协议/schema 4。
 - [x] 灰度/RGB、原始像元、NoData/掩膜、旋转/未知 CRS 与混合图层。
 - [x] 导出、schema 1-3 迁移、复制中途取消、发布与恢复边界。
 - [x] Python 195、前端 65、Rust 7；源码/冻结 RPC、旧项目副本迁移和原生 UI。
-- [ ] 最终 0.4.0 NSIS、发布版/安装后报告、本机安装与卸载。
-- [ ] 执行说明、功能提交推送及对应 CI，阶段总结与精简交接。
+- [x] 最终 0.4.0 NSIS、发布版/安装后报告、本机安装与卸载。
+- [x] 执行说明、功能提交推送及对应 CI，阶段总结与精简交接。
 
 当前证据见 [Phase 1C 验证记录](docs/verification-phase-1c.md)；完整原生 UI
 与真实历史项目副本迁移在本机执行，CI 的 native smoke 为宿主/RPC 检查。
+功能提交 `3311d09` 与验收脚本修正 `edb43ad` 已推送；后者的
+[Windows CI 34335919203](https://github.com/Johnxcloudy/spatial-analysis/actions/runs/34335919203)
+为 success，安装器、原生冒烟及上传通过。阶段文档使用 `[skip ci]` 收尾。
 
 ## 后续阶段
 
-- Phase 1C：完成当前分发/Git 收尾，见 [实施计划](docs/superpowers/plans/2026-09-09-phase-1c.md) 与 [范围约束](docs/phase-1c.md)。
+- Phase 1C：已完成，见 [实施计划](docs/superpowers/plans/2026-09-09-phase-1c.md) 与 [范围约束](docs/phase-1c.md)。
 - Phase 1D：项目另存/重新定位与跨格式工作区回归。
 - Phase 2：正式土地叠加、分类面积与成果导出。
 - Phase 3：完整任务取消、恢复、大样本性能和发布稳定性。

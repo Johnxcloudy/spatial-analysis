@@ -1,7 +1,7 @@
 # Phase 1C 验证记录
 
 日期：2026-09-09。应用 0.4.0、协议 4、schema 4、worker 协议 3。
-状态：源码、冻结引擎、原生界面验收通过；安装器与 Git/CI 收尾进行中。
+状态：本机开发与分发验收通过；功能和验收脚本已推送，对应远程 Windows CI 通过。
 
 ## 范围
 
@@ -29,8 +29,16 @@ x64，I: 为 exFAT；Rasterio 1.4.3 与 affine 2.4.0 由 uv.lock 固定。
   待发布文件和日志，项目重开可再次处理，不误报导出完成。
 - 各模块与最终集成已独立复核，侧车/标签和 UI 像元/缩放断言问题已闭环。
 - 第一轮发布版原生报告发现冒烟断言把 uint16 的原值预期为 "1.0"；诊断样本
-  和引擎均正确返回整数原值 "1"。已修正该断言，最终发布/安装报告另行重验。
+  和引擎均正确返回整数原值 "1"。已修正该断言，最终发布/安装报告均重验通过。
   原生验收必须检查 native-smoke.json 的 ok=true，进程退出码不足以证明通过。
+- 首次远程 CI 在父 Python 生成栅格样本时找不到 proj.db，前置冻结引擎、矢量
+  和表格均通过。已在本机复现：PowerShell/.NET 将 SetEnvironmentVariable 的
+  $null 转为空字符串，PROJ_DATA/PROJ_LIB 变为存在但为空。删除改用 Remove-Item
+  Env:，finally 区分原先不存在和原有值；同一 PowerShell 进程内严格核对恢复值，
+  再运行完整冻结栅格 10 项通过，证据 `.artifacts/environment-recovery-phase1c.json`
+  及 `.artifacts/rasters-frozen-phase1c-environment-recovery/raster-verification.json`。
+  补充 `.artifacts/environment-states-phase1c.json` 验证原先缺失、存在但为空、
+  已有非空值三种状态均正确恢复，错误的继承资源路径不会影响冻结引擎诊断。
 
 ## 源码与冻结检查
 
@@ -94,8 +102,38 @@ schemas 1/2/3 的单元迁移回归也保留。
 ## 分发与 Git
 
 最终 `scripts/build-engine.ps1 -SkipSync` 成功，隔离环境冻结检查通过。
-0.4.0 NSIS 安装器、发布版/安装后 EXE 冒烟、本机临时安装与卸载待完成。
-功能提交、推送和对应 Windows CI 待完成，不能引用历史 CI 代替本轮验证。
+发布版最终报告 `.artifacts/native-release-phase1c-final/native-smoke.json` 为
+`ok=true`、`packaged=true`、引擎 0.4.0、schema 4，核对诊断像元 row/column/raw
+值和导出逐字节相等，保留 4 个数据集与 3 个图层，保存重开通过。
+
+NSIS 安装器：`apps/desktop/src-tauri/target/release/bundle/nsis/Spatial Analysis Desktop_0.4.0_x64-setup.exe`，
+341,220,393 字节。SHA-256：`E63048884A73B2D8CF2925AB2365BC08DECF9D5031FD7FF135E9A8A4470B7849`。
+
+确认无既有安装后，静默安装到 `.artifacts/installed-phase1c`。注册版本与位置
+正确；NSIS 注册表路径带引号，验证脚本去除外层引号后核对。安装 EXE 仅有
+Tauri 正常写入的 UNK→NSS 三字节 bundle 标记差异，其余字节一致。
+`.artifacts/native-installed-phase1c/native-smoke.json` 为 `ok=true`，确认冻结
+0.4.0 的真实矢量、表格转点和栅格导入/查询/导出、项目重开通过。随后静默卸载，
+程序及注册项已移除；项目与报告位于安装目录外。证据：`.artifacts/installer-phase1c.json`。
+
+功能提交 `3311d091d89251aadecf633d2f88d3755aae944d` 已推送至 `feat/phase-1a`。
+其 [CI 34334757220](https://github.com/Johnxcloudy/spatial-analysis/actions/runs/34334757220)
+因上述验收脚本环境恢复问题失败，原始安全日志保留在 `.artifacts/ci-phase1c-3311d09.json`。
+修正提交 `edb43ada82211d580f8a2cdee361fe12b608f1f9` 已推送并核对远程 SHA，
+仅改变验收脚本，应用代码及已验收安装器不变。该提交的
+[CI 34335919203](https://github.com/Johnxcloudy/spatial-analysis/actions/runs/34335919203)
+已最终核对为 `status=completed`、`conclusion=success`，Windows job
+`102415152655` 的 27 个步骤全部成功，包括前端/引擎/Rust、源码/冻结工作流、
+安装器构建、发布版原生冒烟及产物上传。CI 产物
+`spatial-analysis-windows-edb43ada82211d580f8a2cdee361fe12b608f1f9`
+（ID `10098146834`）已上传，查询时未过期；CI 归档与本地安装器是不同文件，
+不得混用其哈希。安全状态快照保存在 `.artifacts/ci-phase1c.json`。
+
+收尾时再次核对本机最终工作流、迁移、发布/安装和环境恢复报告，均为 `ok=true`，
+安装器 SHA-256 一致。收尾只改文档，经复核与 `git diff --check`，不重复应用测试。
+文档提交使用 `[skip ci]` 跳过重复构建；通过的 CI 对应上述代码及验收脚本提交，
+不泛指文档提交。可用 `git log -1 --grep="docs: close Phase 1C delivery"` 定位收尾提交，
+恢复时重新检查 HEAD、工作区和远程分支。
 
 ## 验证边界
 

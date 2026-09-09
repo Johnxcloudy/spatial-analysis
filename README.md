@@ -1,6 +1,6 @@
 # Spatial Analysis Desktop
 
-面向土地利用、用地叠加与面积统计的 Windows 本地 GIS 工作站。当前开发版本为 **0.4.0 / Phase 1C：GeoTIFF 基础**，交付范围和验收状态见 [Phase 1C 验证记录](docs/verification-phase-1c.md)。
+面向土地利用、用地叠加与面积统计的 Windows 本地 GIS 工作站。当前版本为 **0.4.0 / Phase 1C：GeoTIFF 基础**，本机交付与对应代码的 Windows CI 已通过；范围和验证边界见 [Phase 1C 验证记录](docs/verification-phase-1c.md)。
 
 ## 当前范围
 

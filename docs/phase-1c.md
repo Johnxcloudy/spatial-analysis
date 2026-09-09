@@ -1,7 +1,8 @@
 # Phase 1C: GeoTIFF Foundations
 
-Status: authorized and in development. Target application 0.4.0, public protocol 4,
-project schema 4, private worker protocol 3. Acceptance uses synthetic data.
+Status: delivered with local development/distribution acceptance and Windows CI
+passed. Application 0.4.0, public protocol 4, project schema 4, private worker
+protocol 3. Acceptance uses synthetic data; see verification-phase-1c.md.
 
 ## Scope
 

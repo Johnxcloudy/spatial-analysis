@@ -4,7 +4,7 @@ Windows-first personal GIS workstation for land-use overlay and area statistics.
 
 ## Current Scope
 
-Phase 1C (target 0.4.0) is authorized and in development: self-contained GeoTIFF import/display/sample/export. Read docs/phase-1c.md and docs/superpowers/plans/2026-09-09-phase-1c.md for exact scope and progress. Phase 1B (0.3.0) is delivered; its evidence is in docs/verification-phase-1b.md. Acceptance uses synthetic data. Cartography and optional Agent assistance remain future tasks in docs/cartography-roadmap.md. Phase 1D consolidation and Phase 2 land overlay follow 1C. Read the latest user instruction and 执行说明.md before selecting work; shared/contracts.ts owns public contracts.
+Phase 1C (0.4.0) is delivered: self-contained GeoTIFF import/display/sample/export, with local distribution acceptance and Windows CI passed. Read docs/phase-1c.md and docs/verification-phase-1c.md for exact scope and evidence. Acceptance uses synthetic data. Cartography and optional Agent assistance remain future tasks in docs/cartography-roadmap.md. Phase 1D consolidation and Phase 2 land overlay follow 1C; neither has started. Read the latest user instruction and 执行说明.md before selecting work; shared/contracts.ts owns public contracts.
 
 ## Required Stage Closeout
 
@@ -41,12 +41,13 @@ Phase 1B implementation and local distribution verification are complete. See do
 docs/verification-phase-1b.md and shared/contracts.ts. Versions: application 0.3.0,
 protocol 3, project schema 3. Use synthetic data; read the latest Git/CI state in 执行说明.md.
 
-## Ownership During Phase 1C
+## Delivered Phase 1C
 
-- Store worker: projects.py, workspace.py, tasks.py, worker.py and related tests only.
-- GIS worker: rasters.py, raster_fixtures.py and test_rasters.py only.
-- Frontend worker: apps/desktop/src/ only.
-- Primary agent: shared/, apps/desktop/src-tauri/, scripts/, Git, CI, and integration docs.
-- Primary also owns RPC routing, entry point, version coordination and end-to-end acceptance scripts.
+Application 0.4.0, public protocol 4, project schema 4, private worker protocol 3.
+GeoTIFF snapshots are native rasters/<UUID>.tif files; display PNGs never replace
+the original grid. Source/frozen/native/install checks and Windows CI passed;
+real-data, ArcGIS, independent Windows, offline/upgrade and performance checks
+remain open. See 执行说明.md for exact commits and evidence boundaries.
 
-Use apply_patch for authored files. Do not overwrite another worker's files without coordinating.
+Phase 1C worker assignments are closed. Establish explicit file ownership for
+future parallel work. Use apply_patch and coordinate edits to shared files.
