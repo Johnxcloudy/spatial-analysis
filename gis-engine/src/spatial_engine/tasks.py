@@ -125,6 +125,68 @@ class TaskManager:
         )
         return task
 
+    def start_table_import(self, params: dict[str, Any]) -> dict[str, Any]:
+        require_exact_keys(params, {"path", "sourcePath", "encoding", "delimiter", "sheet", "headerRow"})
+        self.projects.active_path(params["path"])
+        self.workspace.recover()
+        self.harvest()
+        self._require_idle()
+        source_path = require_path(params["sourcePath"], "sourcePath")
+        if not source_path.is_file() or source_path.suffix.lower() not in {".csv", ".xlsx"}:
+            raise DomainError("Table source must be an existing CSV or XLSX file", kind="unsupported_source")
+        from . import tables
+
+        options = tables.validate_options(
+            {
+                "sourcePath": str(source_path), "encoding": params["encoding"], "delimiter": params["delimiter"],
+                "sheet": params["sheet"], "headerRow": params["headerRow"],
+            },
+            for_import=True,
+        )
+        task_id = str(uuid.uuid4())
+        dataset_id = str(uuid.uuid4())
+        task = self.workspace.create_task("import", task_id=task_id, dataset_id=dataset_id)
+        self._start(
+            task_id,
+            "table_import",
+            {**options, "datasetId": dataset_id},
+            publish_path=None,
+        )
+        return task
+
+    def start_table_points(self, params: dict[str, Any]) -> dict[str, Any]:
+        require_exact_keys(params, {"path", "datasetId", "xField", "yField", "declaredCrs"})
+        self.projects.active_path(params["path"])
+        self.workspace.recover()
+        self.harvest()
+        self._require_idle()
+        source_id = require_string(params["datasetId"], "datasetId", maximum=64)
+        dataset = self.workspace.dataset(params["path"], source_id)
+        if dataset["kind"] != "table":
+            raise DomainError("Point generation requires a table dataset", kind="invalid_dataset")
+        x_field = require_string(params["xField"], "xField", maximum=256)
+        y_field = require_string(params["yField"], "yField", maximum=256)
+        if x_field == y_field:
+            raise InvalidParamsError("xField and yField must be different")
+        field_names = {field["name"] for field in dataset["fields"]}
+        if x_field not in field_names or y_field not in field_names:
+            raise InvalidParamsError("xField and yField must name table fields")
+        declared_crs = require_crs(params["declaredCrs"], "declaredCrs")
+        managed_path = self.workspace.managed_path(dataset)
+        task_id = str(uuid.uuid4())
+        output_dataset_id = str(uuid.uuid4())
+        task = self.workspace.create_task("points", task_id=task_id, dataset_id=output_dataset_id)
+        self._start(
+            task_id,
+            "points",
+            {
+                "dataset": dataset, "managedPath": str(managed_path), "datasetId": output_dataset_id,
+                "xField": x_field, "yField": y_field, "declaredCrs": declared_crs,
+            },
+            publish_path=None,
+        )
+        return task
+
     def get(self, params: dict[str, Any]) -> dict[str, Any]:
         require_exact_keys(params, {"path", "taskId"})
         self.projects.active_path(params["path"])
@@ -195,7 +257,7 @@ class TaskManager:
                 raise DomainError("Worker exited unsuccessfully", kind="worker_failed", detail=str(return_code))
             payload = result["result"]
             task = self.workspace.task(task_id)
-            if task["kind"] == "import":
+            if task["kind"] != "export":
                 self._complete_import(task_id, work_dir, payload)
             else:
                 self._complete_export(task_id, work_dir, payload, task)
@@ -232,7 +294,7 @@ class TaskManager:
             work_dir.mkdir(parents=True, exist_ok=False)
             request_path = work_dir / "request.json"
             _atomic_json(request_path, {
-                "protocolVersion": 1, "taskId": task_id, "kind": kind,
+                "protocolVersion": 2, "taskId": task_id, "kind": kind,
                 "payload": payload, "workDir": str(work_dir.resolve()),
                 "publishPath": str(publish_path.resolve()) if publish_path is not None else None,
             })

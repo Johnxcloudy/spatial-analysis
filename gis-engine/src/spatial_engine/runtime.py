@@ -5,6 +5,7 @@ import sys
 from importlib import metadata
 
 import geopandas
+import openpyxl
 import pyarrow
 import pyogrio
 import pyproj
@@ -29,6 +30,7 @@ def library_versions() -> dict[str, str]:
         "proj": pyproj.proj_version_str,
         "numpy": metadata.version("numpy"),
         "pyarrow": pyarrow.__version__,
+        "openpyxl": openpyxl.__version__,
     }
 
 
@@ -58,7 +60,7 @@ def driver_capabilities() -> dict[str, str]:
 
 def runtime_info() -> dict:
     return {
-        "protocolVersion": 2,
+        "protocolVersion": 3,
         "engineVersion": __version__,
         "pythonVersion": platform.python_version(),
         "packaged": bool(getattr(sys, "frozen", False)),

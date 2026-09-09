@@ -1,12 +1,12 @@
-# Desktop engine protocol v2
+# Desktop engine protocol v3
 
-Transport: persistent console sidecar, UTF-8 newline-delimited JSON-RPC 2.0. The host assigns request IDs and serializes calls. One response line per request. No protocol chatter or logs on stdout. A 90-second host deadline terminates an unresponsive process tree. Import/export scans execute in a child worker, while short task polling remains responsive. Methods not listed here are rejected. Responses use camelCase matching shared/contracts.ts. Protocol version is 2. Requests are limited to 1 MiB; responses to 8 MiB including the newline. Oversize responses return a domain error without losing the active project.
+Transport: persistent console sidecar, UTF-8 newline-delimited JSON-RPC 2.0. The host assigns request IDs and serializes calls. One response line per request. No protocol chatter or logs on stdout. A 90-second host deadline terminates an unresponsive process tree. Import/export/point jobs execute in a child worker, while short task polling remains responsive. Methods not listed here are rejected. Responses use camelCase matching shared/contracts.ts. Protocol version is 3. Requests are limited to 1 MiB; responses to 8 MiB including the newline. Oversize responses return a domain error without losing the active project.
 
 ## Methods
 
 - runtime.info, params {} -> RuntimeInfo. Load actual GIS libraries and report actual GDAL driver capabilities, not assumed availability.
 - project.create, params {directory: string, name: string} -> Project. directory is the intended NEW project directory (may exist if project.spa does not). name is a nonempty display name. Create project.spa and owned subdirectories; never overwrite a project. Default description empty, analysisCrs null, displayCrs EPSG:3857, viewState {center:[114,27.1],zoom:5}. Engine holds a lock for the active project. Creation/open closes the previously active project only after the new operation succeeds.
-- project.open, params {path: string} -> Project. path is an existing project.spa. Validate identity and schema before any writes; acquire an exclusive OS-backed lock, fail clearly if held by another engine. Back up schema v1 via SQLite backup, validate that backup, then migrate transactionally to v2. Reject future schema versions and corrupt files.
+- project.open, params {path: string} -> Project. path is an existing project.spa. Validate identity and schema before any writes; acquire an exclusive OS-backed lock, fail clearly if held by another engine. Back up schema v1/v2 via SQLite backup, validate that backup, then migrate transactionally to v3. Reject future schema versions and corrupt files.
 - project.save, params {path:string, name:string, description:string, analysisCrs:string|null, displayCrs:string, viewState:{center:[number,number],zoom:number}} -> Project. Must refer to the active project. Validate finite coordinates, zoom and CRS. Use an atomic SQLite transaction; preserve id/createdAt and update updatedAt. Invalid inputs must not change the project.
 - project.close, params {} -> {closed:true}. Release active project lock.
 - diagnostics.run, params {directory:string} -> ProbeReport. directory is for generated diagnostic artifacts (a cache folder, not original inputs). Create a unique subdirectory per run. Test a 100m x 100m rectangle at x=500000, y=3000000 in EPSG:4547; overlay with a 50m-shifted rectangle produces 5000m2 intersection. Measure the full rectangle as 10000m2. Use GeoPandas/Shapely, real GeoPackage IO, and PROJ forward/inverse transformation; report pass/fail checks and generate WGS84 GeoJSON preview of source/intersection. Save a JSON report. Check actual OpenFileGDB and GeoTIFF driver availability and tiny raster IO if installed. Preserve original data. Probe is synthetic and is not real-world survey accuracy validation.
@@ -15,6 +15,25 @@ Phase 1A methods are `source.inspect`, `workspace.get`, `vector.import`, `vector
 
 The Python entry point is `python -m spatial_engine` (stdio). `--request '<JSON request>'` runs one request and exits for CI/package smoke tests. The frozen console executable is named spatial-engine.exe and accepts the same switch. The private `--worker <request-file>` mode executes one GIS job in its staging directory, using atomic progress/result files; stdout remains unused by the worker. Project metadata is modified only by the parent service.
 
-Application version 0.2.0. Project schema version 2. The engine stores its rotating log under LOCALAPPDATA/SpatialAnalysis/logs/engine.log (with an appropriate non-Windows development fallback). No log tokens or secrets. Error response: {jsonrpc:"2.0",id,error:{code,message,data?:{kind,detail?}}}. Standard parse/invalid-request/method/params errors use -32700/-32600/-32601/-32602. Domain failures use -32000 with stable data.kind. A syntactically valid JSON value that is not an RPC object is an invalid request; a parser recursion failure is a parse error.
+Application version 0.3.0. Project schema version 3. The engine stores its rotating log under LOCALAPPDATA/SpatialAnalysis/logs/engine.log (with an appropriate non-Windows development fallback). No log tokens or secrets. Error response: {jsonrpc:"2.0",id,error:{code,message,data?:{kind,detail?}}}. Standard parse/invalid-request/method/params errors use -32700/-32600/-32601/-32602. Domain failures use -32000 with stable data.kind. A syntactically valid JSON value that is not an RPC object is an invalid request; a parser recursion failure is a parse error.
+
+## Phase 1B Methods
+
+- table.inspect, params TableOptions -> TableInspection. Options contain exactly
+  sourcePath, encoding, delimiter, sheet and headerRow. XLSX sheet=null enumerates
+  sheets; import requires an explicit worksheet. CSV encoding/delimiter are explicit;
+  XLSX uses null for both. Preview is bounded and does not validate the full source.
+- table.import, params TableOptions plus path -> Task (kind import). Creates an
+  immutable TableDataset with records registered as GeoPackage attributes.
+- table.page, params {path,datasetId,offset,limit,sortField,descending,filter} ->
+  AttributePage. Same bounds as vector.page, restricted to tables.
+- table.export, params {path,datasetId,destination} -> Task (kind export). Exports
+  a new GeoPackage including auxiliary cell provenance; destination must not exist.
+- table.points, params {path,datasetId,xField,yField,declaredCrs} -> Task (kind points).
+  Publishes a separate point vector, retains invalid rows with null geometry and
+  error fields, and requires at least one valid point. No formulas or CRS guessing.
+
+Table and vector routes validate dataset kind. Workspace.datasets is a discriminated
+union; tables have no MapLayer. Detailed preservation and limits: [Phase 1B](../docs/phase-1b.md).
 
 The Tauri command is engine_request(method: EngineMethod, params: object), returning the result value or a serialized EngineError. The frontend receives only results, not JSON-RPC envelopes. In a standalone browser the native bridge is unavailable and project/engine actions must show this honestly; no fake success or mock persistent projects.

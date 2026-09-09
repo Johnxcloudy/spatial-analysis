@@ -209,6 +209,7 @@ def canonical_value(value):
 
 def verify_snapshot(path: Path, dataset: dict, expected: pa.Table | None = None, geometry_name: str | None = None, cancelled=lambda: False) -> None:
     _cancel(cancelled)
+    is_table = dataset.get("kind") == "table"
     if expected is None and _content_hash(path, cancelled) != dataset["version"]:
         raise DomainError("Managed snapshot changed after import", kind="snapshot_changed")
     info = pyogrio.read_info(path, layer=dataset["storageLayer"], force_feature_count=True)
@@ -235,11 +236,17 @@ def verify_snapshot(path: Path, dataset: dict, expected: pa.Table | None = None,
             field["storageType"], field["nullable"] = str(stored.type), stored.nullable
         elif str(stored.type) != field["storageType"] or stored.nullable != field["nullable"]:
             raise DomainError("Snapshot field schema does not match registered metadata", kind="roundtrip_failed", detail=field["name"])
-    actual_geometries = _decode_geometry(actual[actual_geometry].to_pylist())
-    finite = shapely.bounds(actual_geometries[~shapely.is_missing(actual_geometries) & ~shapely.is_empty(actual_geometries)])
-    actual_bounds = [float(finite[:, 0].min()), float(finite[:, 1].min()), float(finite[:, 2].max()), float(finite[:, 3].max())] if len(finite) else None
-    if actual_bounds != dataset["bounds"]:
-        raise DomainError("Snapshot bounds do not match registered metadata", kind="roundtrip_failed")
+    if is_table:
+        if any(dataset[key] is not None for key in ("geometryType", "crsWkt", "crsAuthority", "bounds", "boundsWgs84")) or info["crs"]:
+            raise DomainError("Nonspatial table unexpectedly has geometry or CRS metadata", kind="roundtrip_failed")
+        from .tables import verify_table_auxiliary
+        verify_table_auxiliary(path, dataset, cancelled=cancelled)
+    else:
+        actual_geometries = _decode_geometry(actual[actual_geometry].to_pylist())
+        finite = shapely.bounds(actual_geometries[~shapely.is_missing(actual_geometries) & ~shapely.is_empty(actual_geometries)])
+        actual_bounds = [float(finite[:, 0].min()), float(finite[:, 1].min()), float(finite[:, 2].max()), float(finite[:, 3].max())] if len(finite) else None
+        if actual_bounds != dataset["bounds"]:
+            raise DomainError("Snapshot bounds do not match registered metadata", kind="roundtrip_failed")
     ids = actual[dataset["internalIdField"]].to_pylist()
     if ids != [str(index + 1) for index in range(dataset["featureCount"])]:
         raise DomainError("Snapshot feature identities are invalid", kind="roundtrip_failed")
@@ -248,7 +255,7 @@ def verify_snapshot(path: Path, dataset: dict, expected: pa.Table | None = None,
     if expected is not None:
         for column in expected.column_names:
             _cancel(cancelled)
-            if column == geometry_name:
+            if not is_table and column == geometry_name:
                 expected_geometries = _decode_geometry(expected[column].to_pylist())
                 matches = shapely.equals_exact(expected_geometries, actual_geometries, tolerance=0.0)
                 matches |= shapely.is_missing(expected_geometries) & shapely.is_missing(actual_geometries)

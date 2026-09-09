@@ -9,13 +9,13 @@ import type { EngineMethod, ProbeReport, Project, RuntimeInfo, Task } from '../.
 vi.mock('./components/VectorMap', () => ({ VectorMap: () => <div data-testid="vector-map" /> }));
 
 const project: Project = {
-  id: 'test-project', name: '用地检查', description: '', schemaVersion: 2,
+  id: 'test-project', name: '用地检查', description: '', schemaVersion: 3,
   createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z',
   projectPath: 'C:/test/用地检查/project.spa', analysisCrs: null, displayCrs: 'EPSG:3857',
   viewState: { center: [114, 27.1], zoom: 5 },
 };
 const runtime: RuntimeInfo = {
-  protocolVersion: 2, engineVersion: '0.2.0', pythonVersion: 'test-python', packaged: false,
+  protocolVersion: 3, engineVersion: '0.3.0', pythonVersion: 'test-python', packaged: false,
   versions: { GDAL: 'test-gdal' }, drivers: { GPKG: 'test-driver' }, logPath: 'C:/test/engine.log',
 };
 const report: ProbeReport = {
@@ -57,6 +57,7 @@ function fixtureBridge(native = true) {
     chooseProject: vi.fn(async () => project.projectPath),
     chooseVector: vi.fn(async () => 'C:/test/land.gpkg'),
     chooseGdb: vi.fn(async () => 'C:/test/land.gdb'),
+    selectTableSource: vi.fn(async () => 'C:/test/points.csv'),
     chooseExport: vi.fn(async () => 'C:/test/export.gpkg'),
     join: vi.fn(async (...paths: string[]) => paths.join('/')),
     diagnosticDirectory: vi.fn(async (path?: string) => path ? 'C:/test/用地检查/cache' : 'C:/test/app-cache'),

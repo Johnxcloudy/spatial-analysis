@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 2 as const;
+export const PROTOCOL_VERSION = 3 as const;
 
 export interface ViewState {
   center: [number, number];
@@ -11,7 +11,7 @@ export interface Project {
   description: string;
   createdAt: string;
   updatedAt: string;
-  schemaVersion: 2;
+  schemaVersion: 3;
   projectPath: string;
   analysisCrs: string | null;
   displayCrs: string;
@@ -19,7 +19,7 @@ export interface Project {
 }
 
 export interface RuntimeInfo {
-  protocolVersion: 2;
+  protocolVersion: 3;
   engineVersion: string;
   pythonVersion: string;
   packaged: boolean;
@@ -76,6 +76,11 @@ export type EngineMethod =
   | "workspace.get"
   | "vector.import"
   | "vector.export"
+  | "table.inspect"
+  | "table.import"
+  | "table.export"
+  | "table.page"
+  | "table.points"
   | "task.get"
   | "task.cancel"
   | "layer.update"
@@ -125,11 +130,10 @@ export interface ImportReport {
   validatorVersion: string;
 }
 
-export interface VectorDataset {
+export interface DatasetCommon {
   id: string;
   version: string;
   name: string;
-  kind: "vector";
   source: {
     path: string;
     layer: string;
@@ -143,7 +147,6 @@ export interface VectorDataset {
   relativePath: string;
   storageLayer: string;
   featureCount: number;
-  geometryType: string;
   crsWkt: string | null;
   crsAuthority: string | null;
   bounds: Bounds | null;
@@ -153,6 +156,43 @@ export interface VectorDataset {
   sourceFidField: string;
   report: ImportReport;
   createdAt: string;
+}
+
+export interface VectorDataset extends DatasetCommon {
+  kind: "vector";
+  geometryType: string;
+}
+
+export interface TableDataset extends DatasetCommon {
+  kind: "table";
+  geometryType: null;
+  crsWkt: null;
+  crsAuthority: null;
+  bounds: null;
+  boundsWgs84: null;
+  storageLayer: "records";
+  cellMetadataLayer: "cell_metadata" | null;
+}
+
+export type Dataset = VectorDataset | TableDataset;
+
+export interface TableOptions {
+  sourcePath: string;
+  encoding: string | null;
+  delimiter: string | null;
+  sheet: string | null;
+  headerRow: number;
+}
+
+export interface TableInspection {
+  sourcePath: string;
+  driver: "CSV" | "XLSX";
+  sheets: string[];
+  sheet: string | null;
+  columns: { index: number; sourceName: string | null; fieldName: string }[];
+  rows: { sourceRow: number; values: Record<string, string | null> }[];
+  truncated: boolean;
+  warnings: string[];
 }
 
 export interface MapLayer {
@@ -169,7 +209,7 @@ export interface MapLayer {
 
 export interface Task {
   id: string;
-  kind: "import" | "export";
+  kind: "import" | "export" | "points";
   status: "running" | "completed" | "failed" | "cancelled" | "interrupted";
   stage: string;
   completed: number | null;
@@ -183,7 +223,7 @@ export interface Task {
 
 export interface Workspace {
   projectId: string;
-  datasets: VectorDataset[];
+  datasets: Dataset[];
   layers: MapLayer[];
   tasks: Task[];
 }
@@ -196,6 +236,7 @@ export interface AttributeFilter {
 
 export interface AttributeRow {
   id: string;
+  sourceRow?: string | null;
   values: Record<string, FieldValue>;
 }
 

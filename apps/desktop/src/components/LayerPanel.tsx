@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { ArrowDown, ArrowUp, Eye, EyeOff, Layers3, Scan, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Eye, EyeOff, Layers3, Scan, Table2, Trash2, X } from 'lucide-react';
 import type { Bounds } from '../../../../shared/contracts';
 import type { WorkspaceState } from '../use-workspace';
 import { Modal } from './Modal';
 
 export function LayerPanel({ state, onFit }: { state: WorkspaceState; onFit: (bounds: Bounds) => void }) {
   const layers = state.workspace?.layers ?? [];
+  const tables = state.workspace?.datasets.filter((item) => item.kind === 'table') ?? [];
   const layer = layers.find((item) => item.id === state.selectedLayerId);
   const dataset = state.workspace?.datasets.find((item) => item.id === layer?.datasetId);
   const [name, setName] = useState('');
@@ -30,6 +31,7 @@ export function LayerPanel({ state, onFit }: { state: WorkspaceState; onFit: (bo
         <div className="layer-order"><button className="icon-button" aria-label={`上移 ${item.name}`} title="上移图层" disabled={disabled || index === 0} onClick={() => reorder(index, -1)}><ArrowUp size={13} /></button><button className="icon-button" aria-label={`下移 ${item.name}`} title="下移图层" disabled={disabled || index === layers.length - 1} onClick={() => reorder(index, 1)}><ArrowDown size={13} /></button></div>
       </div>;
     })}{!layers.length && <div className="layer-empty"><Layers3 size={27} strokeWidth={1.3} /><span>{state.project ? '暂无图层' : '未打开项目'}</span></div>}</div>
+    {!!tables.length && <section className="table-list" aria-label="表格列表"><h2>表格</h2>{tables.map((table) => <button key={table.id} className={`table-select ${state.selectedTableId === table.id ? 'active' : ''}`} aria-pressed={state.selectedTableId === table.id} onClick={() => state.setSelectedTableId(table.id)}><Table2 size={16} /><span><strong>{table.name}</strong><small>{table.featureCount.toLocaleString('zh-CN')} 条记录</small></span></button>)}</section>}
     {layer && <div className="layer-settings"><div className="section-heading"><h2>图层设置</h2><div><button className="icon-button" title="缩放至图层" aria-label="缩放至图层" disabled={!dataset?.boundsWgs84} onClick={() => dataset?.boundsWgs84 && onFit(dataset.boundsWgs84)}><Scan size={17} /></button><button className="icon-button" title="移除图层" aria-label="移除图层" disabled={disabled || !!state.activeTask} onClick={() => setRemoving(true)}><Trash2 size={16} /></button></div></div>
       <fieldset disabled={disabled}><label className="field">图层名称<input value={name} onChange={(event) => setName(event.target.value)} onBlur={() => { if (name.trim() && name.trim() !== layer.name) void state.updateLayer(layer.id, { name: name.trim() }); else setName(layer.name); }} /></label>
         <label className="field">不透明度 <span className="range-field"><input type="range" aria-label="图层不透明度" min={0} max={1} step={0.05} value={opacity} onChange={(event) => setOpacity(Number(event.target.value))} onPointerUp={commitOpacity} onKeyUp={commitOpacity} onBlur={commitOpacity} /><output>{Math.round(opacity * 100)}%</output></span></label>

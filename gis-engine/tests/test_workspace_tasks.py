@@ -75,6 +75,29 @@ def _dataset(dataset_id: str | None = None) -> dict:
     }
 
 
+def _table_dataset(dataset_id: str | None = None) -> dict:
+    dataset = _dataset(dataset_id)
+    dataset.update(
+        {
+            "kind": "table",
+            "source": {
+                **dataset["source"],
+                "driver": "CSV",
+                "encoding": "utf-8",
+                "crsWkt": None,
+            },
+            "storageLayer": "records",
+            "geometryType": None,
+            "crsWkt": None,
+            "crsAuthority": None,
+            "bounds": None,
+            "boundsWgs84": None,
+            "cellMetadataLayer": None,
+        }
+    )
+    return dataset
+
+
 def _stage_import(project: dict, workspace: WorkspaceStore, dataset: dict, task_id: str) -> Path:
     root = Path(project["projectPath"]).parent
     staged = root / "staging" / "tasks" / task_id / "snapshot.gpkg"
@@ -101,7 +124,7 @@ def test_dataset_publication_persists_and_rows_are_immutable(tmp_path: Path) -> 
 
     with sqlite3.connect(project["projectPath"]) as connection:
         with pytest.raises(sqlite3.IntegrityError):
-            connection.execute("UPDATE vector_datasets SET version = 'changed'")
+            connection.execute("UPDATE datasets SET version = 'changed'")
 
     projects.close()
     reopened = ProjectStore()
@@ -141,6 +164,49 @@ def test_layer_updates_reorder_and_remove_retain_dataset(tmp_path: Path) -> None
     snapshot = workspace.get({"path": project["projectPath"]})
     assert len(snapshot["datasets"]) == 2
     assert len(snapshot["layers"]) == 1
+    projects.close()
+
+
+def test_table_publication_uses_generic_registry_without_map_layer(tmp_path: Path) -> None:
+    projects, project, workspace = _stores(tmp_path)
+    dataset = _table_dataset()
+    task_id = str(uuid.uuid4())
+    _stage_import(project, workspace, dataset, task_id)
+
+    completed = workspace.complete_import_publication(task_id)
+    snapshot = workspace.get({"path": project["projectPath"]})
+
+    assert completed["status"] == "completed"
+    assert snapshot["datasets"] == [dataset]
+    assert snapshot["layers"] == []
+    projects.close()
+
+
+def test_points_task_only_publishes_vector_dataset_and_layer(tmp_path: Path) -> None:
+    projects, project, workspace = _stores(tmp_path)
+    vector = _dataset()
+    task_id = str(uuid.uuid4())
+    root = Path(project["projectPath"]).parent
+    staged = root / "staging" / "tasks" / task_id / "snapshot.gpkg"
+    staged.parent.mkdir(parents=True)
+    content = b"point snapshot"
+    staged.write_bytes(content)
+    vector["version"] = hashlib.sha256(content).hexdigest()
+    workspace.create_task("points", task_id=task_id, dataset_id=vector["id"])
+    workspace.prepare_import_publication(task_id, vector, staged)
+
+    assert workspace.complete_import_publication(task_id)["kind"] == "points"
+    assert workspace.get({"path": project["projectPath"]})["layers"][0]["datasetId"] == vector["id"]
+
+    invalid_task = workspace.create_task("points", dataset_id=str(uuid.uuid4()))
+    invalid_table = _table_dataset(invalid_task["datasetId"])
+    invalid_staged = root / "staging" / "tasks" / invalid_task["id"] / "snapshot.gpkg"
+    invalid_staged.parent.mkdir(parents=True)
+    invalid_staged.write_bytes(b"table")
+    invalid_table["version"] = hashlib.sha256(b"table").hexdigest()
+    with pytest.raises(DomainError) as error:
+        workspace.prepare_import_publication(invalid_task["id"], invalid_table, invalid_staged)
+    assert error.value.kind == "invalid_worker_result"
     projects.close()
 
 
@@ -195,7 +261,7 @@ def test_import_journal_survives_registration_failure_and_recovers_on_reopen(tmp
     )
     with sqlite3.connect(project["projectPath"]) as connection:
         connection.execute(
-            "CREATE TRIGGER fail_registration BEFORE INSERT ON vector_datasets "
+            "CREATE TRIGGER fail_registration BEFORE INSERT ON datasets "
             "BEGIN SELECT RAISE(ABORT, 'injected registration failure'); END"
         )
 
@@ -322,6 +388,100 @@ def test_task_cancel_reaps_a_real_child_process(tmp_path: Path) -> None:
     projects.close()
 
 
+def test_table_and_points_tasks_write_private_protocol_two_requests(tmp_path: Path) -> None:
+    projects, project, workspace = _stores(tmp_path)
+
+    def command(request_path: Path) -> list[str]:
+        script = (
+            "import sys,time; from pathlib import Path; w=Path(sys.argv[1]).parent; "
+            "\nwhile not w.joinpath('cancel.flag').exists(): time.sleep(0.02)"
+        )
+        return [sys.executable, "-c", script, str(request_path)]
+
+    manager = TaskManager(projects, workspace, command_factory=command)
+    source = tmp_path / "coordinates.csv"
+    source.write_text("x,y\n114,27\n", encoding="utf-8")
+    imported = manager.start_table_import(
+        {
+            "path": project["projectPath"], "sourcePath": str(source), "encoding": "UTF-8",
+            "delimiter": ",", "sheet": None, "headerRow": 1,
+        }
+    )
+    import_request = json.loads(
+        (Path(project["projectPath"]).parent / "staging" / "tasks" / imported["id"] / "request.json").read_text()
+    )
+    assert imported["kind"] == "import"
+    assert import_request["protocolVersion"] == 2
+    assert import_request["kind"] == "table_import"
+    assert import_request["payload"]["datasetId"] == imported["datasetId"]
+    manager.cancel({"path": project["projectPath"], "taskId": imported["id"]})
+
+    table = _table_dataset()
+    table["fields"].append({**table["fields"][0], "name": "name"})
+    publication_id = str(uuid.uuid4())
+    _stage_import(project, workspace, table, publication_id)
+    workspace.complete_import_publication(publication_id)
+    points = manager.start_table_points(
+        {
+            "path": project["projectPath"], "datasetId": table["id"], "xField": "code",
+            "yField": "name", "declaredCrs": "EPSG:4326",
+        }
+    )
+    points_request = json.loads(
+        (Path(project["projectPath"]).parent / "staging" / "tasks" / points["id"] / "request.json").read_text()
+    )
+    assert points["kind"] == "points"
+    assert points_request["protocolVersion"] == 2
+    assert points_request["kind"] == "points"
+    assert points_request["payload"]["dataset"]["id"] == table["id"]
+    assert points_request["payload"]["datasetId"] == points["datasetId"]
+    manager.cancel({"path": project["projectPath"], "taskId": points["id"]})
+    projects.close()
+
+
+def test_table_import_and_points_complete_through_real_worker(tmp_path: Path) -> None:
+    projects, project, workspace = _stores(tmp_path)
+    manager = TaskManager(projects, workspace)
+    source = tmp_path / "coordinates.csv"
+    source.write_text("x,y,name\n114,27,one\n,27,missing x\n", encoding="utf-8")
+
+    imported = manager.start_table_import(
+        {
+            "path": project["projectPath"], "sourcePath": str(source), "encoding": "UTF-8",
+            "delimiter": ",", "sheet": None, "headerRow": 1,
+        }
+    )
+    deadline = time.monotonic() + 15
+    while imported["status"] == "running" and time.monotonic() < deadline:
+        time.sleep(0.05)
+        imported = manager.get({"path": project["projectPath"], "taskId": imported["id"]})
+    assert imported["status"] == "completed", imported
+
+    table = workspace.dataset(project["projectPath"], imported["datasetId"])
+    assert table["kind"] == "table"
+    assert workspace.get({"path": project["projectPath"]})["layers"] == []
+
+    points = manager.start_table_points(
+        {
+            "path": project["projectPath"], "datasetId": table["id"], "xField": "x",
+            "yField": "y", "declaredCrs": "EPSG:4326",
+        }
+    )
+    deadline = time.monotonic() + 15
+    while points["status"] == "running" and time.monotonic() < deadline:
+        time.sleep(0.05)
+        points = manager.get({"path": project["projectPath"], "taskId": points["id"]})
+    assert points["status"] == "completed", points
+
+    snapshot = workspace.get({"path": project["projectPath"]})
+    datasets = {dataset["id"]: dataset for dataset in snapshot["datasets"]}
+    assert datasets[points["datasetId"]]["kind"] == "vector"
+    assert datasets[points["datasetId"]]["report"]["counts"]["invalidCoordinates"] == 1
+    assert [layer["datasetId"] for layer in snapshot["layers"]] == [points["datasetId"]]
+    manager.close()
+    projects.close()
+
+
 def test_worker_rejects_malformed_request_without_stdout(tmp_path: Path, capsys) -> None:
     from spatial_engine.worker import run_worker
 
@@ -351,7 +511,7 @@ def test_worker_does_not_delete_colliding_export_pending_file(tmp_path: Path, mo
     request.write_text(
         json.dumps(
             {
-                "protocolVersion": 1,
+                "protocolVersion": 2,
                 "taskId": task_id,
                 "kind": "export",
                 "payload": {},
@@ -396,7 +556,7 @@ def test_worker_retries_transient_windows_progress_replace(tmp_path: Path, monke
     request.write_text(
         json.dumps(
             {
-                "protocolVersion": 1,
+                "protocolVersion": 2,
                 "taskId": task_id,
                 "kind": "import",
                 "payload": {},

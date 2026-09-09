@@ -67,7 +67,7 @@ def _read_request(path: Path) -> dict[str, Any]:
         "protocolVersion", "taskId", "kind", "payload", "workDir", "publishPath"
     }:
         raise DomainError("Worker request shape is invalid", kind="invalid_worker_request")
-    if request["protocolVersion"] != 1 or request["kind"] not in {"import", "export"}:
+    if request["protocolVersion"] != 2 or request["kind"] not in {"import", "export", "table_import", "points"}:
         raise DomainError("Worker request version or kind is invalid", kind="invalid_worker_request")
     if not isinstance(request["taskId"], str):
         raise DomainError("Worker task id is invalid", kind="invalid_worker_request")
@@ -81,8 +81,8 @@ def _read_request(path: Path) -> dict[str, Any]:
     if work_dir is None or work_dir != path.parent.resolve(strict=False) or work_dir.name != request["taskId"]:
         raise DomainError("Worker directory is invalid", kind="invalid_worker_request")
     publish_path = request["publishPath"]
-    if request["kind"] == "import" and publish_path is not None:
-        raise DomainError("Import publication path must be null", kind="invalid_worker_request")
+    if request["kind"] != "export" and publish_path is not None:
+        raise DomainError("Dataset publication path must be null", kind="invalid_worker_request")
     if request["kind"] == "export":
         if not isinstance(publish_path, str):
             raise DomainError("Export publication path is invalid", kind="invalid_worker_request")
@@ -101,11 +101,11 @@ def _finite_float(value: str) -> float:
 
 
 def _validate_result(kind: str, result: Any, work_dir: Path) -> dict[str, Any]:
-    expected = {"dataset", "artifactPath"} if kind == "import" else {"artifactPath"}
+    expected = {"artifactPath"} if kind == "export" else {"dataset", "artifactPath"}
     if not isinstance(result, dict) or set(result) != expected:
         raise DomainError("Vector operation returned an invalid result", kind="invalid_worker_result")
     artifact_path = result.get("artifactPath")
-    expected_name = "snapshot.gpkg" if kind == "import" else "export.gpkg"
+    expected_name = "export.gpkg" if kind == "export" else "snapshot.gpkg"
     expected_path = (work_dir / expected_name).resolve(strict=False)
     if not isinstance(artifact_path, str) or Path(artifact_path).resolve(strict=False) != expected_path:
         raise DomainError("Vector operation returned an invalid artifact path", kind="invalid_worker_result")
@@ -172,10 +172,15 @@ def run_worker(request_path: Path) -> int:
 
         if cancelled():
             raise DomainError("Task was cancelled", kind="task_cancelled")
-        from . import vectors
+        if request["kind"] in {"import", "export"}:
+            from . import vectors
 
-        operation = vectors.import_vector if request["kind"] == "import" else vectors.export_vector
-        result = operation(request["payload"], work_dir, progress, cancelled)
+            operation = vectors.import_vector if request["kind"] == "import" else vectors.export_vector
+        else:
+            from . import tables
+
+            operation = tables.import_table if request["kind"] == "table_import" else tables.table_to_points
+        result = operation(request["payload"], work_dir, progress=progress, cancelled=cancelled)
         if cancelled():
             raise DomainError("Task was cancelled", kind="task_cancelled")
         validated = _validate_result(request["kind"], result, work_dir)

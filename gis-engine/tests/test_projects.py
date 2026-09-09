@@ -30,7 +30,7 @@ def test_project_create_save_close_open_round_trip(tmp_path: Path) -> None:
     project_dir = tmp_path / "含空格 project"
 
     created = engine.dispatch("project.create", {"directory": str(project_dir), "name": "Land study"})
-    assert created["schemaVersion"] == 2
+    assert created["schemaVersion"] == 3
     assert created["name"] == "Land study"
     assert created["description"] == ""
     assert created["analysisCrs"] is None
@@ -174,17 +174,22 @@ def test_open_migrates_v1_after_creating_a_valid_backup(tmp_path: Path) -> None:
     creator.close()
     project_path = Path(created["projectPath"])
     with sqlite3.connect(project_path) as connection:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("DROP TRIGGER IF EXISTS datasets_no_update")
+        connection.execute("DROP TRIGGER IF EXISTS datasets_no_delete")
+        connection.execute("DROP TABLE IF EXISTS pending_exports")
         connection.execute("DROP TRIGGER IF EXISTS vector_datasets_no_update")
         connection.execute("DROP TRIGGER IF EXISTS vector_datasets_no_delete")
         connection.execute("DROP TABLE IF EXISTS pending_publications")
         connection.execute("DROP TABLE IF EXISTS map_layers")
+        connection.execute("DROP TABLE IF EXISTS datasets")
         connection.execute("DROP TABLE IF EXISTS vector_datasets")
         connection.execute("DROP TABLE IF EXISTS tasks")
         connection.execute("PRAGMA user_version = 1")
 
     opened = Engine().dispatch("project.open", {"path": str(project_path)})
 
-    assert opened["schemaVersion"] == 2
+    assert opened["schemaVersion"] == 3
     backups = list((project_path.parent / "backups").glob("*.spa"))
     assert len(backups) == 1
     with sqlite3.connect(backups[0]) as backup:
@@ -205,12 +210,12 @@ def test_failed_migration_rolls_back_releases_lock_and_keeps_active_project(
     with sqlite3.connect(legacy_path) as connection:
         connection.execute("PRAGMA user_version = 1")
 
-    real_migrate = project_module._migrate_v1_to_v2
+    real_migrate = project_module._migrate_to_v3
 
-    def fail_migration(path: Path) -> None:
+    def fail_migration(path: Path, source_version: int) -> None:
         raise sqlite3.OperationalError("injected migration failure")
 
-    monkeypatch.setattr(project_module, "_migrate_v1_to_v2", fail_migration)
+    monkeypatch.setattr(project_module, "_migrate_to_v3", fail_migration)
     with pytest.raises(DomainError) as error:
         engine.dispatch("project.open", {"path": str(legacy_path)})
     assert error.value.kind == "project_migration_failed"
@@ -218,10 +223,78 @@ def test_failed_migration_rolls_back_releases_lock_and_keeps_active_project(
     with sqlite3.connect(legacy_path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
 
-    monkeypatch.setattr(project_module, "_migrate_v1_to_v2", real_migrate)
+    monkeypatch.setattr(project_module, "_migrate_to_v3", real_migrate)
     contender = Engine()
-    assert contender.dispatch("project.open", {"path": str(legacy_path)})["schemaVersion"] == 2
+    assert contender.dispatch("project.open", {"path": str(legacy_path)})["schemaVersion"] == 3
     contender.close()
+
+
+def test_open_migrates_v2_registry_tasks_and_layers_with_v2_backup(tmp_path: Path) -> None:
+    creator = Engine()
+    created = creator.dispatch("project.create", {"directory": str(tmp_path / "v2"), "name": "Version two"})
+    creator.close()
+    project_path = Path(created["projectPath"])
+    dataset_id = "00000000-0000-0000-0000-000000000001"
+    layer_id = "00000000-0000-0000-0000-000000000002"
+    task_id = "00000000-0000-0000-0000-000000000003"
+    export_task_id = "00000000-0000-0000-0000-000000000004"
+    with sqlite3.connect(project_path) as connection:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("DROP TRIGGER datasets_no_update")
+        connection.execute("DROP TRIGGER datasets_no_delete")
+        connection.execute("DROP TABLE pending_publications")
+        connection.execute("DROP TABLE pending_exports")
+        connection.execute("DROP TABLE map_layers")
+        connection.execute("DROP TABLE datasets")
+        connection.execute("DROP TABLE tasks")
+        project_module._create_v2_schema(connection)
+        connection.execute(
+            "INSERT INTO vector_datasets VALUES (?, ?, ?, ?, ?)",
+            (dataset_id, "0" * 64, f"datasets/{dataset_id}.gpkg", '{"kind":"vector"}', "2026-09-09T00:00:00Z"),
+        )
+        connection.execute(
+            "INSERT INTO map_layers VALUES (?, ?, 'Layer', 1, 1.0, '#123456', NULL, '{}', 0)",
+            (layer_id, dataset_id),
+        )
+        connection.execute(
+            "INSERT INTO tasks VALUES (?, 'import', 'running', 'publishing', 1, 1, ?, ?, ?, NULL, NULL)",
+            (task_id, "2026-09-09T00:00:00Z", "2026-09-09T00:00:01Z", dataset_id),
+        )
+        connection.execute(
+            "INSERT INTO tasks VALUES (?, 'export', 'running', 'publishing', 1, 1, ?, ?, ?, ?, NULL)",
+            (
+                export_task_id, "2026-09-09T00:00:02Z", "2026-09-09T00:00:03Z", dataset_id,
+                str(tmp_path / "export.gpkg"),
+            ),
+        )
+        connection.execute(
+            "INSERT INTO pending_publications VALUES (?, ?, ?, ?, ?, ?)",
+            (task_id, '{"kind":"vector"}', f"staging/tasks/{task_id}/snapshot.gpkg", f"datasets/{dataset_id}.gpkg", 1, "0" * 64),
+        )
+        connection.execute(
+            "INSERT INTO pending_exports VALUES (?, ?, ?, ?, ?)",
+            (export_task_id, str(tmp_path / ".export.pending"), str(tmp_path / "export.gpkg"), 1, "1" * 64),
+        )
+        connection.execute("PRAGMA user_version = 2")
+
+    opener = Engine()
+    opened = opener.dispatch("project.open", {"path": str(project_path)})
+    assert opened["schemaVersion"] == 3
+    with sqlite3.connect(project_path) as connection:
+        assert connection.execute("SELECT dataset_id FROM datasets").fetchone()[0] == dataset_id
+        assert connection.execute("SELECT layer_id FROM map_layers").fetchone()[0] == layer_id
+        assert connection.execute("SELECT task_id, kind FROM tasks ORDER BY task_id").fetchall() == [
+            (task_id, "import"), (export_task_id, "export")
+        ]
+        assert connection.execute("SELECT task_id FROM pending_publications").fetchone()[0] == task_id
+        assert connection.execute("SELECT task_id FROM pending_exports").fetchone()[0] == export_task_id
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    backups = list((project_path.parent / "backups").glob("project-v2-*.spa"))
+    assert len(backups) == 1
+    with sqlite3.connect(backups[0]) as backup:
+        assert backup.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert backup.execute("SELECT dataset_id FROM vector_datasets").fetchone()[0] == dataset_id
+    opener.close()
 
 
 @pytest.mark.parametrize(

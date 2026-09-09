@@ -1,6 +1,6 @@
-# Phase 1A 架构
+# Phase 1B 架构
 
-React 调用受限的 Tauri engine_request 命令。Rust 通过持久 Python 进程的 UTF-8 JSON Lines 管道发送 JSON-RPC 2.0 请求，Python 管理项目、托管矢量数据和任务。接口见 shared/protocol.md，前端类型见 shared/contracts.ts，当前交付约束见 phase-1a.md。
+React 调用受限的 Tauri engine_request 命令。Rust 通过持久 Python 进程的 UTF-8 JSON Lines 管道发送 JSON-RPC 2.0 请求，Python 管理项目、托管矢量/表格和任务。接口见 shared/protocol.md，前端类型见 shared/contracts.ts，交付约束见 phase-1a.md 和 phase-1b.md。
 
 ## 进程职责
 
@@ -10,7 +10,9 @@ React 调用受限的 Tauri engine_request 命令。Rust 通过持久 Python 进
 - GIS worker：读取原文件、分批完整扫描、写入暂存 GeoPackage、重读验证；通过任务文件报告进度，不写项目元数据库。
 - Windows Job Object：宿主退出后终止引擎及其后代，避免孤立进程继续持有项目。
 
-每个项目同时运行一个导入或导出任务。worker 使用相同冻结 EXE 的私有启动模式。取消先发协作标记，再在必要时终止并回收 worker；项目关闭和切换也会结束活动任务。遗留运行状态在恢复时标记为中断。进度显示读取、写入、校验等真实阶段与可用计数，不虚构整体百分比。
+每个项目同时运行一个导入、导出或坐标转点任务。worker 使用相同冻结 EXE 的私有启动模式。取消先发协作标记，再在必要时终止并回收 worker；项目关闭和切换也会结束活动任务。遗留运行状态在恢复时标记为中断。进度显示读取、写入、校验等真实阶段与可用计数，不虚构整体百分比。
+
+CSV 使用标准库 csv 严格解码，XLSX 使用 openpyxl 只读解析并保留公式文本。表格是独立非空间 GeoPackage，选择字段/CRS 后才能派生点。Excel 类型/格式信息与主表共同进入一个不可变快照，采用相同的发布、校验、导出和恢复机制。
 
 ## 通信和恢复
 

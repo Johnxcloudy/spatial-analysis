@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from spatial_engine.rpc import Engine, handle_request
 
 
@@ -13,11 +15,11 @@ def test_runtime_info_matches_contract(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
     result = Engine().dispatch("runtime.info", {})
 
-    assert result["protocolVersion"] == 2
-    assert result["engineVersion"] == "0.2.0"
+    assert result["protocolVersion"] == 3
+    assert result["engineVersion"] == "0.3.0"
     assert result["pythonVersion"].startswith("3.12")
     assert isinstance(result["packaged"], bool)
-    assert {"geopandas", "shapely", "pyogrio", "pyproj", "rasterio"} <= result["versions"].keys()
+    assert {"geopandas", "shapely", "pyogrio", "pyproj", "rasterio", "openpyxl"} <= result["versions"].keys()
     assert result["drivers"].get("GPKG") in {"r", "rw"}
     assert result["drivers"].get("GTiff") in {"r", "rw"}
     assert Path(result["logPath"]).is_absolute()
@@ -38,6 +40,36 @@ def test_json_rpc_errors_are_stable_and_preserve_id() -> None:
     assert invalid["id"] == "a"
     assert invalid["error"]["code"] == -32602
     assert invalid["error"]["data"]["kind"] == "invalid_params"
+
+
+@pytest.mark.parametrize("method", ["table.inspect", "table.import", "table.points", "table.page", "table.export"])
+def test_table_routes_reject_incomplete_parameters(method: str) -> None:
+    engine = Engine()
+    try:
+        response = handle_request(engine, {"jsonrpc": "2.0", "id": 21, "method": method, "params": {}})
+        assert response["id"] == 21
+        assert response["error"]["code"] == -32602, response
+    finally:
+        engine.close()
+
+
+@pytest.mark.parametrize("method,kind,extra", [
+    ("table.page", "vector", {"offset": 0, "limit": 200, "sortField": None, "descending": False, "filter": None}),
+    ("vector.page", "table", {"offset": 0, "limit": 200, "sortField": None, "descending": False, "filter": None}),
+    ("vector.viewport", "table", {"bbox": [113, 26, 115, 28], "limit": 2000, "propertyFields": []}),
+    ("vector.feature", "table", {"featureId": "1"}),
+    ("table.export", "vector", {"destination": "unused.gpkg"}),
+    ("vector.export", "table", {"destination": "unused.gpkg"}),
+])
+def test_routes_reject_wrong_dataset_kind_before_io(monkeypatch, method: str, kind: str, extra: dict) -> None:
+    engine = Engine()
+    monkeypatch.setattr(engine.workspace, "dataset", lambda *args: {"kind": kind})
+    try:
+        response = handle_request(engine, {"jsonrpc": "2.0", "id": 22, "method": method,
+                                           "params": {"path": "unused", "datasetId": "unused", **extra}})
+        assert response["error"]["data"]["kind"] == "invalid_dataset_kind", response
+    finally:
+        engine.close()
 
 
 def test_request_cli_emits_one_protocol_line_without_log_chatter(tmp_path: Path) -> None:

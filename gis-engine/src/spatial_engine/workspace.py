@@ -79,14 +79,16 @@ def _validate_dataset(dataset: Any) -> tuple[dict[str, Any], str]:
         "geometryType", "crsWkt", "crsAuthority", "bounds", "boundsWgs84", "fields", "internalIdField",
         "sourceFidField", "report", "createdAt",
     }
+    if dataset.get("kind") == "table":
+        expected.add("cellMetadataLayer")
     if set(dataset) != expected:
         raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="dataset fields do not match")
     dataset_id = _uuid_string(dataset["id"], "dataset id")
     if not isinstance(dataset["version"], str) or re.fullmatch(r"[0-9a-fA-F]{64}", dataset["version"]) is None:
         raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="dataset version is invalid")
     _text(dataset["name"], "dataset name", MAX_NAME_LENGTH)
-    if dataset["kind"] != "vector":
-        raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="kind must be vector")
+    if dataset["kind"] not in {"vector", "table"}:
+        raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="kind is invalid")
     source = dataset["source"]
     source_keys = {"path", "layer", "driver", "fingerprint", "encoding", "assignedCrs", "crsWkt", "metadata"}
     if not isinstance(source, dict) or set(source) != source_keys:
@@ -104,13 +106,23 @@ def _validate_dataset(dataset: Any) -> tuple[dict[str, Any], str]:
     expected_relative = f"datasets/{dataset_id}.gpkg"
     if dataset["relativePath"] != expected_relative:
         raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="relativePath is invalid")
-    _text(dataset["storageLayer"], "storage layer", 256)
+    storage_layer = _text(dataset["storageLayer"], "storage layer", 256)
+    if dataset["kind"] == "table" and storage_layer != "records":
+        raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="table storage layer is invalid")
     _nonnegative_int(dataset["featureCount"], "feature count")
-    _text(dataset["geometryType"], "geometry type", 256)
-    _text(dataset["crsWkt"], "CRS WKT", 131_072, nullable=True)
-    _text(dataset["crsAuthority"], "CRS authority", 256, nullable=True)
-    _bounds(dataset["bounds"], "bounds")
-    _bounds(dataset["boundsWgs84"], "WGS84 bounds")
+    if dataset["kind"] == "vector":
+        _text(dataset["geometryType"], "geometry type", 256)
+        _text(dataset["crsWkt"], "CRS WKT", 131_072, nullable=True)
+        _text(dataset["crsAuthority"], "CRS authority", 256, nullable=True)
+        _bounds(dataset["bounds"], "bounds")
+        _bounds(dataset["boundsWgs84"], "WGS84 bounds")
+    else:
+        if any(dataset[key] is not None for key in ("geometryType", "crsWkt", "crsAuthority", "bounds", "boundsWgs84")):
+            raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="table spatial metadata must be null")
+        if source["assignedCrs"] is not None or source["crsWkt"] is not None:
+            raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="table source CRS must be null")
+        if dataset["cellMetadataLayer"] not in {None, "cell_metadata"}:
+            raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="cell metadata layer is invalid")
     fields = dataset["fields"]
     if not isinstance(fields, list) or len(fields) > MAX_FIELDS:
         raise DomainError("Dataset metadata is invalid", kind="invalid_dataset", detail="fields are invalid")
@@ -224,7 +236,7 @@ class WorkspaceStore:
         with self._connect(path) as connection:
             project_id = connection.execute("SELECT project_id FROM project_metadata WHERE singleton = 1").fetchone()[0]
             datasets = [json.loads(row[0]) for row in connection.execute(
-                "SELECT dataset_json FROM vector_datasets ORDER BY created_at, dataset_id"
+                "SELECT dataset_json FROM datasets ORDER BY created_at, dataset_id"
             )]
             layers = [self._row_to_layer(row) for row in connection.execute(
                 "SELECT * FROM map_layers ORDER BY display_order, layer_id"
@@ -241,7 +253,7 @@ class WorkspaceStore:
         project_path = self._path(path)
         dataset_id = require_string(dataset_id, "datasetId", maximum=64)
         with self._connect(project_path) as connection:
-            row = connection.execute("SELECT dataset_json FROM vector_datasets WHERE dataset_id = ?", (dataset_id,)).fetchone()
+            row = connection.execute("SELECT dataset_json FROM datasets WHERE dataset_id = ?", (dataset_id,)).fetchone()
         if row is None:
             raise DomainError("Dataset does not exist", kind="dataset_not_found", detail=dataset_id)
         try:
@@ -296,8 +308,10 @@ class WorkspaceStore:
             if "color" in changes:
                 values["color"] = self._color(changes["color"], "changes.color")
             dataset = json.loads(connection.execute(
-                "SELECT dataset_json FROM vector_datasets WHERE dataset_id = ?", (row["dataset_id"],)
+                "SELECT dataset_json FROM datasets WHERE dataset_id = ?", (row["dataset_id"],)
             ).fetchone()[0])
+            if dataset["kind"] != "vector":
+                raise DomainError("Only vector datasets can have map layers", kind="invalid_project")
             field_names = {field["name"] for field in dataset["fields"]}
             if "categoryField" in changes:
                 category_field = changes["categoryField"]
@@ -359,7 +373,7 @@ class WorkspaceStore:
     def create_task(
         self, kind: str, *, task_id: str | None = None, dataset_id: str | None = None, destination: str | None = None
     ) -> dict[str, Any]:
-        if kind not in {"import", "export"}:
+        if kind not in {"import", "export", "points"}:
             raise InvalidParamsError("task kind is invalid")
         task_id = task_id or str(uuid.uuid4())
         _uuid_string(task_id, "task id")
@@ -423,8 +437,10 @@ class WorkspaceStore:
     def prepare_import_publication(self, task_id: str, dataset: dict[str, Any], staged_path: Path) -> None:
         dataset, serialized = _validate_dataset(dataset)
         task = self.task(task_id)
-        if task["kind"] != "import" or task["status"] != "running" or task["datasetId"] != dataset["id"]:
+        if task["kind"] == "export" or task["status"] != "running" or task["datasetId"] != dataset["id"]:
             raise DomainError("Import task does not match its result", kind="invalid_worker_result")
+        if task["kind"] == "points" and dataset["kind"] != "vector":
+            raise DomainError("Point task did not produce a vector dataset", kind="invalid_worker_result")
         root = self._project_root().resolve()
         staged = staged_path.resolve(strict=False)
         expected_parent = (root / "staging" / "tasks" / task_id).resolve(strict=False)
@@ -436,7 +452,7 @@ class WorkspaceStore:
         staged_relative = staged.relative_to(root).as_posix()
         path = self.projects.active_path(str(self.projects._session.path))
         with self._connect(path) as connection:
-            existing_count = connection.execute("SELECT COUNT(*) FROM vector_datasets").fetchone()[0]
+            existing_count = connection.execute("SELECT COUNT(*) FROM datasets").fetchone()[0]
             if existing_count >= MAX_DATASETS:
                 raise DomainError("Project dataset limit reached", kind="dataset_limit")
             connection.execute(
@@ -475,18 +491,19 @@ class WorkspaceStore:
         timestamp = _utc_now()
         with self._connect(path) as connection:
             connection.execute("BEGIN IMMEDIATE")
-            count = connection.execute("SELECT COUNT(*) FROM vector_datasets").fetchone()[0]
+            count = connection.execute("SELECT COUNT(*) FROM datasets").fetchone()[0]
             if count >= MAX_DATASETS:
                 raise DomainError("Project dataset limit reached", kind="dataset_limit")
             connection.execute(
-                "INSERT INTO vector_datasets VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO datasets VALUES (?, ?, ?, ?, ?)",
                 (dataset["id"], dataset["version"], dataset["relativePath"], serialized, dataset["createdAt"]),
             )
-            next_order = connection.execute("SELECT COALESCE(MAX(display_order), -1) + 1 FROM map_layers").fetchone()[0]
-            connection.execute(
-                "INSERT INTO map_layers VALUES (?, ?, ?, 1, 1.0, '#2563EB', NULL, '{}', ?)",
-                (str(uuid.uuid4()), dataset["id"], dataset["name"], next_order),
-            )
+            if dataset["kind"] == "vector":
+                next_order = connection.execute("SELECT COALESCE(MAX(display_order), -1) + 1 FROM map_layers").fetchone()[0]
+                connection.execute(
+                    "INSERT INTO map_layers VALUES (?, ?, ?, 1, 1.0, '#2563EB', NULL, '{}', ?)",
+                    (str(uuid.uuid4()), dataset["id"], dataset["name"], next_order),
+                )
             connection.execute(
                 "UPDATE tasks SET status = 'completed', stage = 'completed', completed = total, "
                 "updated_at = ?, error = NULL WHERE task_id = ?", (timestamp, task_id)

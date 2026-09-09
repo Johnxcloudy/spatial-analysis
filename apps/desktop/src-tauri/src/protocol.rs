@@ -36,6 +36,11 @@ pub fn validate_request(method: &str, params: &Value) -> Result<(), EngineError>
             | "workspace.get"
             | "vector.import"
             | "vector.export"
+            | "table.inspect"
+            | "table.import"
+            | "table.export"
+            | "table.page"
+            | "table.points"
             | "task.get"
             | "task.cancel"
             | "layer.update"
@@ -99,6 +104,19 @@ mod tests {
         assert!(validate_request("system.exec", &json!({})).is_err());
         assert!(validate_request("project.open", &json!([])).is_err());
         assert!(validate_request("runtime.info", &json!({})).is_ok());
+    }
+
+    #[test]
+    fn accepts_table_workflow_methods() {
+        for method in [
+            "table.inspect",
+            "table.import",
+            "table.page",
+            "table.points",
+            "table.export",
+        ] {
+            assert!(validate_request(method, &json!({})).is_ok(), "{method}");
+        }
     }
 
     #[test]

@@ -22,6 +22,7 @@ export function translucent(color: string, alpha: number): string {
 
 export function displayValue(value: FieldValue | undefined): string {
   if (value === null || value === undefined) return 'NULL';
+  if (value === '') return '""';
   if (typeof value === 'boolean') return value ? 'true' : 'false';
   return String(value);
 }

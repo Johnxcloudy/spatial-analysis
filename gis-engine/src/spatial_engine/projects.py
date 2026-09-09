@@ -23,7 +23,7 @@ from .validation import (
 )
 
 APPLICATION_ID = 0x53504131
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 PROJECT_IDENTITY = "spatial-analysis-desktop-project"
 PROJECT_FILENAME = "project.spa"
 OWNED_DIRECTORIES = ("datasets", "rasters", "results", "staging", "cache", "backups")
@@ -83,8 +83,10 @@ def _read_project(path: Path, *, accepted_versions: frozenset[int] | None = None
         accepted = accepted_versions or frozenset({SCHEMA_VERSION})
         if application_id != APPLICATION_ID or schema_version not in accepted:
             raise DomainError("File is not a Spatial Analysis project", kind="invalid_project")
-        if schema_version == SCHEMA_VERSION:
+        if schema_version == 2:
             _validate_v2_schema(connection)
+        elif schema_version == SCHEMA_VERSION:
+            _validate_v3_schema(connection)
         row = connection.execute(
             "SELECT identity, project_id, name, description, created_at, updated_at, "
             "analysis_crs, display_crs, view_state FROM project_metadata WHERE singleton = 1"
@@ -191,10 +193,79 @@ def _validate_v2_schema(connection: sqlite3.Connection) -> None:
         raise sqlite3.DatabaseError("project dataset immutability triggers are missing")
 
 
-def _backup_v1_project(path: Path) -> Path:
+def _create_v3_schema(connection: sqlite3.Connection) -> None:
+    statements = (
+        "CREATE TABLE IF NOT EXISTS datasets ("
+        "dataset_id TEXT PRIMARY KEY, version TEXT NOT NULL, relative_path TEXT NOT NULL UNIQUE, "
+        "dataset_json TEXT NOT NULL, created_at TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS map_layers ("
+        "layer_id TEXT PRIMARY KEY, dataset_id TEXT NOT NULL REFERENCES datasets(dataset_id), "
+        "name TEXT NOT NULL, visible INTEGER NOT NULL CHECK (visible IN (0, 1)), "
+        "opacity REAL NOT NULL CHECK (opacity >= 0 AND opacity <= 1), color TEXT NOT NULL, "
+        "category_field TEXT, category_colors TEXT NOT NULL, display_order INTEGER NOT NULL UNIQUE)",
+        "CREATE TABLE IF NOT EXISTS tasks ("
+        "task_id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('import', 'export', 'points')), "
+        "status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed', 'cancelled', 'interrupted')), "
+        "stage TEXT NOT NULL, completed INTEGER, total INTEGER, created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, dataset_id TEXT, destination TEXT, error TEXT)",
+        "CREATE TABLE IF NOT EXISTS pending_publications ("
+        "task_id TEXT PRIMARY KEY REFERENCES tasks(task_id), dataset_json TEXT NOT NULL, "
+        "staged_relative_path TEXT NOT NULL, final_relative_path TEXT NOT NULL, "
+        "artifact_size INTEGER NOT NULL, artifact_sha256 TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS pending_exports ("
+        "task_id TEXT PRIMARY KEY REFERENCES tasks(task_id), temporary_path TEXT NOT NULL, "
+        "destination_path TEXT NOT NULL, artifact_size INTEGER NOT NULL, artifact_sha256 TEXT NOT NULL)",
+        "CREATE TRIGGER IF NOT EXISTS datasets_no_update BEFORE UPDATE ON datasets "
+        "BEGIN SELECT RAISE(ABORT, 'datasets are immutable'); END",
+        "CREATE TRIGGER IF NOT EXISTS datasets_no_delete BEFORE DELETE ON datasets "
+        "BEGIN SELECT RAISE(ABORT, 'datasets are immutable'); END",
+    )
+    for statement in statements:
+        connection.execute(statement)
+
+
+def _validate_v3_schema(connection: sqlite3.Connection) -> None:
+    expected_columns = {
+        "datasets": {"dataset_id", "version", "relative_path", "dataset_json", "created_at"},
+        "map_layers": {
+            "layer_id", "dataset_id", "name", "visible", "opacity", "color", "category_field",
+            "category_colors", "display_order",
+        },
+        "tasks": {
+            "task_id", "kind", "status", "stage", "completed", "total", "created_at", "updated_at",
+            "dataset_id", "destination", "error",
+        },
+        "pending_publications": {
+            "task_id", "dataset_json", "staged_relative_path", "final_relative_path", "artifact_size",
+            "artifact_sha256",
+        },
+        "pending_exports": {
+            "task_id", "temporary_path", "destination_path", "artifact_size", "artifact_sha256",
+        },
+    }
+    for table, columns in expected_columns.items():
+        actual = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        if actual != columns:
+            raise sqlite3.DatabaseError(f"project table {table} has an incompatible schema")
+    triggers = {row[0] for row in connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'datasets'"
+    )}
+    if not {"datasets_no_update", "datasets_no_delete"} <= triggers:
+        raise sqlite3.DatabaseError("project dataset immutability triggers are missing")
+    foreign_tables = {row[2] for row in connection.execute("PRAGMA foreign_key_list(map_layers)")}
+    if foreign_tables != {"datasets"}:
+        raise sqlite3.DatabaseError("project layer dataset reference is invalid")
+    task_sql = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tasks'"
+    ).fetchone()[0]
+    if "'points'" not in task_sql:
+        raise sqlite3.DatabaseError("project task kinds are incompatible")
+
+
+def _backup_project(path: Path, source_version: int) -> Path:
     backup_directory = path.parent / "backups"
     backup_directory.mkdir(parents=True, exist_ok=True)
-    backup_path = backup_directory / f"project-v1-{uuid.uuid4().hex}.spa"
+    backup_path = backup_directory / f"project-v{source_version}-{uuid.uuid4().hex}.spa"
     source: sqlite3.Connection | None = None
     target: sqlite3.Connection | None = None
     failure: Exception | None = None
@@ -216,7 +287,7 @@ def _backup_v1_project(path: Path) -> Path:
             except OSError:
                 pass
         raise failure
-    _read_project(backup_path, accepted_versions=frozenset({1}))
+    _read_project(backup_path, accepted_versions=frozenset({source_version}))
     connection = _connect_readonly(backup_path)
     try:
         if connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
@@ -226,13 +297,38 @@ def _backup_v1_project(path: Path) -> Path:
     return backup_path
 
 
-def _migrate_v1_to_v2(path: Path) -> None:
+def _migrate_to_v3(path: Path, source_version: int) -> None:
     connection = sqlite3.connect(path, timeout=10.0)
     try:
-        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA foreign_keys = OFF")
         connection.execute("BEGIN IMMEDIATE")
-        _create_v2_schema(connection)
-        _validate_v2_schema(connection)
+        if source_version == 1:
+            _create_v3_schema(connection)
+        elif source_version == 2:
+            connection.execute("ALTER TABLE vector_datasets RENAME TO datasets")
+            connection.execute("DROP TRIGGER vector_datasets_no_update")
+            connection.execute("DROP TRIGGER vector_datasets_no_delete")
+            connection.execute(
+                "CREATE TABLE tasks_v3 ("
+                "task_id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('import', 'export', 'points')), "
+                "status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed', 'cancelled', 'interrupted')), "
+                "stage TEXT NOT NULL, completed INTEGER, total INTEGER, created_at TEXT NOT NULL, "
+                "updated_at TEXT NOT NULL, dataset_id TEXT, destination TEXT, error TEXT)"
+            )
+            task_columns = (
+                "task_id, kind, status, stage, completed, total, created_at, updated_at, "
+                "dataset_id, destination, error"
+            )
+            connection.execute(f"INSERT INTO tasks_v3 ({task_columns}) SELECT {task_columns} FROM tasks")
+            connection.execute("DROP TABLE tasks")
+            connection.execute("ALTER TABLE tasks_v3 RENAME TO tasks")
+            _create_v3_schema(connection)
+        else:
+            raise sqlite3.DatabaseError(f"cannot migrate schema version {source_version}")
+        _validate_v3_schema(connection)
+        violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise sqlite3.DatabaseError("project contains invalid foreign key references")
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         connection.commit()
     except Exception:
@@ -325,8 +421,8 @@ class ProjectStore:
                             json.dumps({"center": [114.0, 27.1], "zoom": 5.0}, separators=(",", ":")),
                         ),
                     )
-                    _create_v2_schema(connection)
-                    _validate_v2_schema(connection)
+                    _create_v3_schema(connection)
+                    _validate_v3_schema(connection)
                     connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                     connection.commit()
                 except Exception:
@@ -367,23 +463,25 @@ class ProjectStore:
         require_exact_keys(params, {"path"})
         path = require_path(params["path"], "path")
         if self._session and _same_path(path, self._session.path):
-            current = _read_project(path, accepted_versions=frozenset({1, SCHEMA_VERSION}))
-            if current["schemaVersion"] == 1:
+            current = _read_project(path, accepted_versions=frozenset({1, 2, SCHEMA_VERSION}))
+            if current["schemaVersion"] < SCHEMA_VERSION:
                 try:
-                    _backup_v1_project(path)
-                    _migrate_v1_to_v2(path)
-                except (sqlite3.DatabaseError, OSError) as exc:
+                    source_version = current["schemaVersion"]
+                    _backup_project(path, source_version)
+                    _migrate_to_v3(path, source_version)
+                except (DomainError, sqlite3.DatabaseError, OSError) as exc:
                     raise DomainError(
                         "Could not migrate project", kind="project_migration_failed", detail=str(exc)
                     ) from exc
             return _read_project(path)
-        _read_project(path, accepted_versions=frozenset({1, SCHEMA_VERSION}))
+        _read_project(path, accepted_versions=frozenset({1, 2, SCHEMA_VERSION}))
         session = _acquire_lock(path)
         try:
-            candidate = _read_project(path, accepted_versions=frozenset({1, SCHEMA_VERSION}))
-            if candidate["schemaVersion"] == 1:
-                _backup_v1_project(path)
-                _migrate_v1_to_v2(path)
+            candidate = _read_project(path, accepted_versions=frozenset({1, 2, SCHEMA_VERSION}))
+            if candidate["schemaVersion"] < SCHEMA_VERSION:
+                source_version = candidate["schemaVersion"]
+                _backup_project(path, source_version)
+                _migrate_to_v3(path, source_version)
             project = _read_project(path)
         except (sqlite3.DatabaseError, OSError) as exc:
             session.close()

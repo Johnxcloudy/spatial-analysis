@@ -11,7 +11,7 @@ from .resources import configure_native_data_paths
 from .runtime import runtime_info
 from .tasks import TaskManager
 from .workspace import WorkspaceStore
-from . import vector_queries, vectors
+from . import tables, vector_queries, vectors
 from .validation import require_exact_keys, require_object
 
 ALLOWED_METHODS = {
@@ -25,6 +25,11 @@ ALLOWED_METHODS = {
     "workspace.get",
     "vector.import",
     "vector.export",
+    "table.inspect",
+    "table.import",
+    "table.export",
+    "table.page",
+    "table.points",
     "task.get",
     "task.cancel",
     "layer.update",
@@ -69,13 +74,22 @@ class Engine:
             return run_diagnostics(values)
         if method == "source.inspect":
             return vectors.inspect_source(values)
+        if method == "table.inspect":
+            return tables.inspect_table(values)
         if method == "workspace.get":
             self.projects.active_path(values.get("path"))
             self.tasks.harvest()
             return self.workspace.get(values)
         if method == "vector.import":
             return self.tasks.start_import(values)
-        if method == "vector.export":
+        if method == "table.import":
+            return self.tasks.start_table_import(values)
+        if method == "table.points":
+            return self.tasks.start_table_points(values)
+        if method in {"vector.export", "table.export"}:
+            require_exact_keys(values, {"path", "datasetId", "destination"})
+            dataset = self.workspace.dataset(values.get("path"), values.get("datasetId"))
+            self._require_dataset_kind(dataset, method.split(".")[0])
             return self.tasks.start_export(values)
         if method == "task.get":
             return self.tasks.get(values)
@@ -89,19 +103,27 @@ class Engine:
             return self.workspace.remove_layer(values)
         queries = {
             "vector.page": vector_queries.attribute_page,
+            "table.page": vector_queries.attribute_page,
             "vector.viewport": vector_queries.viewport,
             "vector.feature": vector_queries.feature,
         }
         if method in queries:
             keys = {
                 "vector.page": {"path", "datasetId", "offset", "limit", "sortField", "descending", "filter"},
+                "table.page": {"path", "datasetId", "offset", "limit", "sortField", "descending", "filter"},
                 "vector.viewport": {"path", "datasetId", "bbox", "limit", "propertyFields"},
                 "vector.feature": {"path", "datasetId", "featureId"},
             }
             require_exact_keys(values, keys[method])
             dataset = self.workspace.dataset(values.get("path"), values.get("datasetId"))
+            self._require_dataset_kind(dataset, method.split(".")[0])
             return queries[method](dataset, self.workspace.managed_path(dataset), values)
         raise MethodNotFoundError()
+
+    @staticmethod
+    def _require_dataset_kind(dataset: dict, kind: str) -> None:
+        if dataset["kind"] != kind:
+            raise DomainError(f"This operation requires a {kind} dataset", kind="invalid_dataset_kind")
 
     def close(self) -> None:
         self.tasks.close()

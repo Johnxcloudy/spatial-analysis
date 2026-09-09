@@ -55,8 +55,16 @@ def _value(value, field: dict):
 
 
 def _row(dataset: dict, record) -> dict:
-    return {"id": str(record[dataset["internalIdField"]]),
-            "values": {field["name"]: _value(record[field["name"]], field) for field in dataset["fields"]}}
+    result = {"id": str(record[dataset["internalIdField"]]),
+              "values": {field["name"]: _value(record[field["name"]], field) for field in dataset["fields"]}}
+    if _has_source_row(dataset):
+        original = record[dataset["sourceFidField"]]
+        result["sourceRow"] = str(original) if original is not None else None
+    return result
+
+
+def _has_source_row(dataset: dict) -> bool:
+    return dataset.get("kind") == "table" or dataset.get("source", {}).get("driver") == "TablePoints"
 
 
 def _size(result: dict) -> int:
@@ -114,7 +122,10 @@ def attribute_page(dataset: dict, managed_path: Path, params: dict) -> dict:
     if sort_field is not None:
         quoted = _quote(sort_field)
         order = f"({quoted} IS NULL) ASC, {quoted} {'DESC' if descending else 'ASC'}, " + order
-    columns = ", ".join(_quote(name) for name in [dataset["internalIdField"], *[field["name"] for field in dataset["fields"]]])
+    names = [dataset["internalIdField"], *[field["name"] for field in dataset["fields"]]]
+    if _has_source_row(dataset):
+        names.append(dataset["sourceFidField"])
+    columns = ", ".join(_quote(name) for name in dict.fromkeys(names))
     table = _quote(dataset["storageLayer"])
     try:
         with closing(_connect(managed_path)) as connection:
@@ -157,6 +168,8 @@ def _display_feature(identifier: str, geometry, properties: dict) -> dict:
 
 
 def viewport(dataset: dict, managed_path: Path, params: dict) -> dict:
+    if dataset.get("kind") != "vector":
+        raise DomainError("Table datasets have no map geometry", kind="dataset_not_spatial")
     bounds = _bbox(params.get("bbox"))
     limit = _integer(params.get("limit", MAX_DISPLAY_FEATURES), "limit", 1, MAX_DISPLAY_FEATURES)
     requested = params.get("propertyFields", [])
@@ -216,12 +229,16 @@ def viewport(dataset: dict, managed_path: Path, params: dict) -> dict:
 
 
 def feature(dataset: dict, managed_path: Path, params: dict) -> dict:
+    if dataset.get("kind") != "vector":
+        raise DomainError("Table datasets have no map geometry", kind="dataset_not_spatial")
     feature_id = params.get("featureId")
     if not isinstance(feature_id, str) or not feature_id.isascii() or not feature_id.isdecimal() or len(feature_id) > 10:
         raise InvalidParamsError("featureId must be a stored feature identifier")
     info = pyogrio.read_info(managed_path, layer=dataset["storageLayer"])
     fid_name = info["fid_column"]
     columns = list(dict.fromkeys([fid_name, dataset["internalIdField"], *[field["name"] for field in dataset["fields"]]]))
+    if _has_source_row(dataset) and dataset["sourceFidField"] not in columns:
+        columns.append(dataset["sourceFidField"])
     try:
         with closing(_connect(managed_path)) as connection:
             record = connection.execute(f"SELECT {', '.join(_quote(name) for name in columns)} FROM {_quote(dataset['storageLayer'])} WHERE {_quote(dataset['internalIdField'])} = ?", [feature_id]).fetchone()

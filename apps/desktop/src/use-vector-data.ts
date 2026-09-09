@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AttributeFilter, AttributePage, FeatureResult, VectorDataset } from '../../../shared/contracts';
+import type { AttributeFilter, AttributePage, Dataset, FeatureResult, VectorDataset } from '../../../shared/contracts';
 import type { DesktopBridge } from './bridge';
 
 export interface AttributeQuery {
@@ -12,7 +12,7 @@ export interface AttributeQuery {
 
 export const initialAttributeQuery: AttributeQuery = { offset: 0, limit: 200, sortField: null, descending: false, filter: null };
 
-export function useAttributePage(bridge: DesktopBridge, path: string | undefined, dataset: VectorDataset | undefined, query: AttributeQuery, enabled: boolean, onFailure: (cause: unknown) => void) {
+export function useAttributePage(bridge: DesktopBridge, path: string | undefined, dataset: Dataset | undefined, query: AttributeQuery, enabled: boolean, onFailure: (cause: unknown) => void) {
   const [page, setPage] = useState<AttributePage | null>(null);
   const [loading, setLoading] = useState(false);
   const sequence = useRef(0);
@@ -23,7 +23,7 @@ export function useAttributePage(bridge: DesktopBridge, path: string | undefined
     setLoading(false);
     if (!enabled || !path || !dataset) return;
     setLoading(true);
-    void bridge.request('vector.page', { path, datasetId: dataset.id, ...query }).then((result) => {
+    void bridge.request(dataset.kind === 'table' ? 'table.page' : 'vector.page', { path, datasetId: dataset.id, ...query }).then((result) => {
       if (token !== sequence.current) return;
       if (result.datasetId !== dataset.id || result.version !== dataset.version) throw new Error('属性数据版本不匹配，请刷新工作区。');
       setPage(result);
@@ -31,7 +31,7 @@ export function useAttributePage(bridge: DesktopBridge, path: string | undefined
       if (token === sequence.current) setLoading(false);
     });
     return () => { sequence.current += 1; };
-  }, [bridge, path, dataset?.id, dataset?.version, queryKey, enabled, onFailure]);
+  }, [bridge, path, dataset?.id, dataset?.version, dataset?.kind, queryKey, enabled, onFailure]);
   return { page, loading };
 }
 

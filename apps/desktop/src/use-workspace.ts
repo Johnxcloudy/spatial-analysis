@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { PROTOCOL_VERSION, type EngineError, type MapLayer, type ProbeReport, type Project, type RuntimeInfo, type SourceInspection, type Task, type ViewState, type Workspace } from '../../../shared/contracts';
+import { PROTOCOL_VERSION, type EngineError, type MapLayer, type ProbeReport, type Project, type RuntimeInfo, type SourceInspection, type TableOptions, type Task, type ViewState, type Workspace } from '../../../shared/contracts';
 import { normalizeError, type DesktopBridge } from './bridge';
 import { draftFromProject, hasUnsavedChanges, validateDirectoryName, type ProjectDraft } from './project-state';
 
@@ -11,7 +11,11 @@ export function useWorkspace(bridge: DesktopBridge) {
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [sessionId, setSessionId] = useState(0);
-  const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
+  const [selectedSource, setSelectedSource] = useState<{ kind: 'layer' | 'table'; id: string } | null>(null);
+  const selectedLayerId = selectedSource?.kind === 'layer' ? selectedSource.id : null;
+  const selectedTableId = selectedSource?.kind === 'table' ? selectedSource.id : null;
+  const setSelectedLayerId = useCallback((id: string | null) => setSelectedSource(id ? { kind: 'layer', id } : null), []);
+  const setSelectedTableId = useCallback((id: string) => setSelectedSource({ kind: 'table', id }), []);
   const [report, setReport] = useState<ProbeReport | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<EngineError | null>(null);
@@ -65,12 +69,22 @@ export function useWorkspace(bridge: DesktopBridge) {
     return projectRef.current;
   }, [native]);
 
-  const loadWorkspace = useCallback(async (current: Project, token: number) => {
+  const loadWorkspace = useCallback(async (current: Project, token: number, preferredDatasetId?: string | null) => {
     const next = await bridge.request('workspace.get', { path: current.projectPath });
     if (generation.current !== token || projectRef.current?.id !== current.id) return;
     if (next.projectId !== current.id) throw new Error('工作区响应与当前项目不匹配。');
     setWorkspace(next);
-    setSelectedLayerId((selected) => next.layers.some((layer) => layer.id === selected) ? selected : next.layers[0]?.id ?? null);
+    setSelectedSource((selected) => {
+      if (preferredDatasetId) {
+        const preferredLayer = next.layers.find((layer) => layer.datasetId === preferredDatasetId);
+        if (preferredLayer) return { kind: 'layer', id: preferredLayer.id };
+        if (next.datasets.some((dataset) => dataset.kind === 'table' && dataset.id === preferredDatasetId)) return { kind: 'table', id: preferredDatasetId };
+      }
+      if (selected?.kind === 'layer' && next.layers.some((layer) => layer.id === selected.id)) return selected;
+      if (selected?.kind === 'table' && next.datasets.some((dataset) => dataset.kind === 'table' && dataset.id === selected.id)) return selected;
+      const firstTable = next.datasets.find((dataset) => dataset.kind === 'table');
+      return next.layers[0] ? { kind: 'layer', id: next.layers[0].id } : firstTable ? { kind: 'table', id: firstTable.id } : null;
+    });
   }, [bridge]);
 
   const refreshWorkspace = useCallback(() => run('刷新工作区', async () => {
@@ -235,6 +249,31 @@ export function useWorkspace(bridge: DesktopBridge) {
     setNotice('导入任务已开始');
   });
 
+  const inspectTable = useCallback((options: TableOptions) => {
+    activeProject();
+    return bridge.request('table.inspect', { ...options });
+  }, [activeProject, bridge]);
+
+  const importTable = (options: TableOptions) => run('开始导入表格', async () => {
+    const current = activeProject();
+    rememberTask(await bridge.request('table.import', { path: current.projectPath, ...options }));
+    setNotice('表格导入任务已开始');
+  });
+
+  const generatePoints = (datasetId: string, xField: string, yField: string, declaredCrs: string) => run('生成点数据', async () => {
+    const current = activeProject();
+    rememberTask(await bridge.request('table.points', { path: current.projectPath, datasetId, xField, yField, declaredCrs }));
+    setNotice('点数据生成任务已开始');
+  });
+
+  const exportTable = (datasetId: string, name: string) => run('导出表格 GeoPackage', async () => {
+    const current = activeProject();
+    const destination = await bridge.chooseExport(name);
+    if (!destination) return;
+    rememberTask(await bridge.request('table.export', { path: current.projectPath, datasetId, destination }));
+    setNotice('表格导出任务已开始');
+  });
+
   const exportVector = (datasetId: string, name: string) => run('导出 GeoPackage', async () => {
     const current = activeProject();
     const destination = await bridge.chooseExport(name);
@@ -259,9 +298,9 @@ export function useWorkspace(bridge: DesktopBridge) {
           timer = setTimeout(poll, 700);
         }
         else {
-          setNotice(next.status === 'completed' ? next.kind === 'import' ? '数据已导入' : 'GeoPackage 已导出' : next.error || (next.status === 'cancelled' ? '任务已取消' : '任务未完成'));
+          setNotice(next.status === 'completed' ? next.kind === 'import' ? '数据已导入' : next.kind === 'points' ? '点数据已生成' : 'GeoPackage 已导出' : next.error || (next.status === 'cancelled' ? '任务已取消' : '任务未完成'));
           rememberTask(next);
-          await loadWorkspace(project, token);
+          await loadWorkspace(project, token, next.status === 'completed' && next.kind !== 'export' ? next.datasetId : null);
         }
       } catch (cause) { if (!cancelled && token === generation.current) handleFailure(cause); }
     };
@@ -294,7 +333,7 @@ export function useWorkspace(bridge: DesktopBridge) {
     await loadWorkspace(current, generation.current);
   });
 
-  return { project, draft, setDraft, setView, sessionId, runtime, workspace, selectedLayerId, setSelectedLayerId, refreshWorkspace, activeTask, inspectSource, importVector, exportVector, cancelTask, updateLayer, reorderLayers, removeLayer, handleFailure, report, busy, error, notice, dirty, native, needsReopen, newProject, setNewProject, pending, requestAction, resolvePending, create, save, connect, diagnose };
+  return { project, draft, setDraft, setView, sessionId, runtime, workspace, selectedLayerId, selectedTableId, setSelectedLayerId, setSelectedTableId, refreshWorkspace, activeTask, inspectSource, inspectTable, importVector, importTable, generatePoints, exportVector, exportTable, cancelTask, updateLayer, reorderLayers, removeLayer, handleFailure, report, busy, error, notice, dirty, native, needsReopen, newProject, setNewProject, pending, requestAction, resolvePending, create, save, connect, diagnose };
 }
 
 export type WorkspaceState = ReturnType<typeof useWorkspace>;

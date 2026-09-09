@@ -41,17 +41,23 @@ async fn engine_request(
 async fn smoke_test(app: &AppHandle, directory: &std::path::Path) -> Result<Value, EngineError> {
     let engine = app.state::<EngineManager>();
     let runtime = engine.request(app, "runtime.info", json!({})).await?;
+    if runtime["protocolVersion"] != 3 || runtime["engineVersion"] != "0.3.0" {
+        return Err(EngineError::local(
+            "SMOKE_VERSION_MISMATCH",
+            runtime.to_string(),
+        ));
+    }
     let project_directory = directory.join("项目 smoke test");
     let created = engine
         .request(
             app,
             "project.create",
-            json!({"directory":project_directory,"name":"Phase 1A 本地验证"}),
+            json!({"directory":project_directory,"name":"Phase 1B 本地验证"}),
         )
         .await?;
     let path = created["projectPath"].clone();
     let saved = engine.request(app, "project.save", json!({
-        "path":path,"name":"Phase 1A 本地验证","description":"Native bridge saved successfully",
+        "path":path,"name":"Phase 1B 本地验证","description":"Native bridge saved successfully",
         "analysisCrs":"EPSG:4547","displayCrs":created["displayCrs"],"viewState":created["viewState"]
     })).await?;
     engine.request(app, "project.close", json!({})).await?;
@@ -144,6 +150,91 @@ async fn smoke_test(app: &AppHandle, directory: &std::path::Path) -> Result<Valu
         )
         .await?;
     let exported = wait_for_task(app, &engine, &path, export_task).await?;
+    let table_source = directory.join("coordinates.csv");
+    {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&table_source)
+            .map_err(|error| EngineError::local("SMOKE_SOURCE_FAILED", error.to_string()))?;
+        file.write_all(b"code,x,y\n001,114.0,27.1\n002,bad,27.2\n003,114.2,27.3\n")
+            .map_err(|error| EngineError::local("SMOKE_SOURCE_FAILED", error.to_string()))?;
+    }
+    let table_source_info = engine.request(app, "table.inspect", json!({
+        "sourcePath":table_source,"encoding":"utf-8","delimiter":",","sheet":null,"headerRow":1
+    })).await?;
+    let table_task = engine.request(app, "table.import", json!({
+        "path":path,"sourcePath":table_source,"encoding":"utf-8","delimiter":",","sheet":null,"headerRow":1
+    })).await?;
+    let table_task = wait_for_task(app, &engine, &path, table_task).await?;
+    let table_page = engine
+        .request(
+            app,
+            "table.page",
+            json!({
+                "path":path,"datasetId":table_task["datasetId"],"offset":0,"limit":200,
+                "sortField":"code","descending":false,"filter":null
+            }),
+        )
+        .await?;
+    let table_workspace = engine
+        .request(app, "workspace.get", json!({"path":path}))
+        .await?;
+    if table_page["total"] != 3
+        || table_page["rows"][0]["values"]["code"] != "001"
+        || table_workspace["layers"].as_array().map(Vec::len) != Some(1)
+    {
+        return Err(EngineError::local(
+            "SMOKE_TABLE_MISMATCH",
+            table_page.to_string(),
+        ));
+    }
+    let point_task = engine.request(app, "table.points", json!({
+        "path":path,"datasetId":table_task["datasetId"],"xField":"x","yField":"y","declaredCrs":"EPSG:4326"
+    })).await?;
+    let point_task = wait_for_task(app, &engine, &path, point_task).await?;
+    let point_page = engine
+        .request(
+            app,
+            "vector.page",
+            json!({
+                "path":path,"datasetId":point_task["datasetId"],"offset":0,"limit":200,
+                "sortField":"code","descending":false,"filter":null
+            }),
+        )
+        .await?;
+    let point_view = engine
+        .request(
+            app,
+            "vector.viewport",
+            json!({
+                "path":path,"datasetId":point_task["datasetId"],"bbox":[113.0,26.0,115.0,28.0],
+                "limit":2000,"propertyFields":["code"]
+            }),
+        )
+        .await?;
+    if point_page["total"] != 3 || point_view["returnedCount"] != 2 {
+        return Err(EngineError::local(
+            "SMOKE_POINTS_MISMATCH",
+            point_page.to_string(),
+        ));
+    }
+    let table_export = engine.request(app, "table.export", json!({
+        "path":path,"datasetId":table_task["datasetId"],"destination":directory.join("table-export.gpkg")
+    })).await?;
+    let table_export = wait_for_task(app, &engine, &path, table_export).await?;
+    let workspace = engine
+        .request(app, "workspace.get", json!({"path":path}))
+        .await?;
+    if workspace["datasets"].as_array().map(Vec::len) != Some(3)
+        || workspace["layers"].as_array().map(Vec::len) != Some(2)
+    {
+        return Err(EngineError::local(
+            "SMOKE_DATASETS_MISMATCH",
+            workspace.to_string(),
+        ));
+    }
     engine.request(app, "project.close", json!({})).await?;
     engine
         .request(app, "project.open", json!({"path":path}))
@@ -160,7 +251,9 @@ async fn smoke_test(app: &AppHandle, directory: &std::path::Path) -> Result<Valu
     }
     Ok(
         json!({"ok":true,"runtime":runtime,"created":created,"reopened":reopened,"diagnostics":report,
-            "source":source,"workspace":restored,"attributes":attributes,"viewport":viewport,"exported":exported}),
+            "source":source,"workspace":restored,"attributes":attributes,"viewport":viewport,"exported":exported,
+            "tableSource":table_source_info,"tablePage":table_page,"pointPage":point_page,
+            "pointViewport":point_view,"tableExport":table_export}),
     )
 }
 

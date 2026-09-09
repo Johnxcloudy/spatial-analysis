@@ -4,7 +4,7 @@ Windows-first personal GIS workstation for land-use overlay and area statistics.
 
 ## Current Scope
 
-Phase 1A (0.2.0) is delivered with synthetic acceptance data; see docs/verification-phase-1a.md. Cartography and optional Agent design assistance are future tasks in docs/cartography-roadmap.md, not implemented capabilities. Phase 1B coordinate tables, 1C rasters, 1D consolidation and Phase 2 land overlay remain the next product milestones. Read the latest user instruction and the handoff summary in 执行说明.md before selecting work. See docs/phase-1a.md and shared/contracts.ts for the implemented contracts.
+Phase 1B (0.3.0) adds CSV/XLSX tables and explicit coordinate-to-point generation to Phase 1A vectors. Acceptance uses synthetic data; current evidence is in docs/verification-phase-1b.md. Cartography and optional Agent design assistance remain future tasks in docs/cartography-roadmap.md. Phase 1C rasters, 1D consolidation and Phase 2 land overlay are the next product milestones. Read the latest user instruction and the handoff summary in 执行说明.md before selecting work. See docs/phase-1a.md, docs/phase-1b.md and shared/contracts.ts for contracts.
 
 ## Required Stage Closeout
 
@@ -35,10 +35,16 @@ Phase 1A (0.2.0) is delivered with synthetic acceptance data; see docs/verificat
 - Formal exports use complete data and explicit output budgets, not the bounded interactive viewport. Validate map-frame CRS, physical scale, legends, NoData, fonts and vector/raster output capabilities.
 - Publication/Nature themes are configurable presets with rule provenance, not claims of journal or planning compliance. Offline manual rendering remains available without an Agent.
 
-## Ownership During Phase 1A
+## Delivered Phase 1B
+
+Phase 1B implementation and local distribution verification are complete. See docs/phase-1b.md,
+docs/verification-phase-1b.md and shared/contracts.ts. Versions: application 0.3.0,
+protocol 3, project schema 3. Use synthetic data; read the latest Git/CI state in 执行说明.md.
+
+## Ownership During Phase 1B
 
 - Store worker: projects.py, workspace.py, tasks.py, worker.py and related tests only.
-- Vector worker: vectors.py, vector_queries.py, pyproject.toml/uv.lock, GIS fixtures and related tests only.
+- GIS worker: tables.py, vectors.py, vector_queries.py, pyproject.toml/uv.lock, GIS fixtures and related tests only.
 - Frontend worker: apps/desktop/src/ only.
 - Primary agent: shared/, apps/desktop/src-tauri/, scripts/, Git, CI, and integration docs.
 - Primary also owns RPC routing, entry point, version coordination and end-to-end acceptance scripts.

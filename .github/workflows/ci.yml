@@ -60,6 +60,9 @@ jobs:
           uv run --project gis-engine --frozen python scripts/generate-vector-fixtures.py .artifacts/vector-fixtures
           uv run --project gis-engine --frozen python scripts/verify-vectors.py --output .artifacts/vectors-source-ci --fixtures .artifacts/vector-fixtures/manifest.json
 
+      - name: Verify coordinate tables through persistent RPC
+        run: uv run --project gis-engine --frozen python scripts/verify-tables.py --output .artifacts/tables-source-ci
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all -- --check
 
@@ -74,6 +77,7 @@ jobs:
           $engine = (Resolve-Path 'apps/desktop/src-tauri/resources/engine/spatial-engine.exe').Path
           ./scripts/smoke-engine.ps1 -Executable $engine -OutputDirectory '.artifacts/frozen-engine/ci'
           uv run --project gis-engine --frozen python scripts/verify-vectors.py --executable $engine --output .artifacts/vectors-frozen-ci --fixtures .artifacts/vector-fixtures/manifest.json
+          uv run --project gis-engine --frozen python scripts/verify-tables.py --executable $engine --output .artifacts/tables-frozen-ci
 
       - name: Build Windows installer
         run: npm run tauri -- build
@@ -110,4 +114,6 @@ jobs:
             .artifacts/frozen-engine/**/*.log
             .artifacts/vectors-*/**/*.json
             .artifacts/vectors-*/**/*.log
+            .artifacts/tables-*/**/*.json
+            .artifacts/tables-*/**/*.log
             ${{ runner.temp }}/spatial-analysis-native-*/**/*.json
