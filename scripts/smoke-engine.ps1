@@ -81,7 +81,7 @@ function Assert-SmokeCheck {
 
 try {
     foreach ($name in $environmentNames) {
-        if ($name -ne 'PATH') { [Environment]::SetEnvironmentVariable($name, $null, 'Process') }
+        if ($name -ne 'PATH') { Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue }
     }
     $systemRoot = [Environment]::GetEnvironmentVariable('SystemRoot', 'Process')
     if ([string]::IsNullOrWhiteSpace($systemRoot)) { throw 'SystemRoot is unavailable.' }
@@ -141,7 +141,12 @@ try {
     throw
 } finally {
     foreach ($name in $environmentNames) {
-        [Environment]::SetEnvironmentVariable($name, $originalEnvironment[$name], 'Process')
+        # PowerShell/.NET can convert $null to an empty, still-present variable.
+        if ($null -eq $originalEnvironment[$name]) {
+            Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+        } else {
+            [Environment]::SetEnvironmentVariable($name, $originalEnvironment[$name], 'Process')
+        }
     }
     $OutputEncoding = $originalOutputEncoding
     [Console]::OutputEncoding = $originalConsoleEncoding
