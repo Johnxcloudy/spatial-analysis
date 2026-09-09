@@ -23,10 +23,10 @@ from .validation import (
 )
 
 APPLICATION_ID = 0x53504131
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 PROJECT_IDENTITY = "spatial-analysis-desktop-project"
 PROJECT_FILENAME = "project.spa"
-OWNED_DIRECTORIES = ("datasets", "rasters", "results", "staging", "cache")
+OWNED_DIRECTORIES = ("datasets", "rasters", "results", "staging", "cache", "backups")
 
 
 def _utc_now(after: str | None = None) -> str:
@@ -46,7 +46,7 @@ def _connect_readonly(path: Path) -> sqlite3.Connection:
     return sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
 
 
-def _row_to_project(row: sqlite3.Row, path: Path) -> dict[str, Any]:
+def _row_to_project(row: sqlite3.Row, path: Path, schema_version: int) -> dict[str, Any]:
     try:
         view_state = json.loads(row["view_state"])
     except (json.JSONDecodeError, TypeError) as exc:
@@ -57,7 +57,7 @@ def _row_to_project(row: sqlite3.Row, path: Path) -> dict[str, Any]:
         "description": row["description"],
         "createdAt": row["created_at"],
         "updatedAt": row["updated_at"],
-        "schemaVersion": SCHEMA_VERSION,
+        "schemaVersion": schema_version,
         "projectPath": str(path.resolve()),
         "analysisCrs": row["analysis_crs"],
         "displayCrs": row["display_crs"],
@@ -65,7 +65,7 @@ def _row_to_project(row: sqlite3.Row, path: Path) -> dict[str, Any]:
     }
 
 
-def _read_project(path: Path) -> dict[str, Any]:
+def _read_project(path: Path, *, accepted_versions: frozenset[int] | None = None) -> dict[str, Any]:
     if not path.is_file():
         raise DomainError("Project file does not exist", kind="project_not_found", detail=str(path))
     connection: sqlite3.Connection | None = None
@@ -80,15 +80,18 @@ def _read_project(path: Path) -> dict[str, Any]:
                 kind="unsupported_schema",
                 detail=f"schema version {schema_version}",
             )
-        if application_id != APPLICATION_ID or schema_version != SCHEMA_VERSION:
+        accepted = accepted_versions or frozenset({SCHEMA_VERSION})
+        if application_id != APPLICATION_ID or schema_version not in accepted:
             raise DomainError("File is not a Spatial Analysis project", kind="invalid_project")
+        if schema_version == SCHEMA_VERSION:
+            _validate_v2_schema(connection)
         row = connection.execute(
             "SELECT identity, project_id, name, description, created_at, updated_at, "
             "analysis_crs, display_crs, view_state FROM project_metadata WHERE singleton = 1"
         ).fetchone()
         if row is None or row["identity"] != PROJECT_IDENTITY:
             raise DomainError("Project identity is invalid", kind="invalid_project")
-        project = _row_to_project(row, path)
+        project = _row_to_project(row, path, schema_version)
         _validate_stored_project(project)
         return project
     except DomainError:
@@ -125,6 +128,118 @@ def _validate_stored_project(project: dict[str, Any]) -> None:
     except (InvalidParamsError, ValueError, KeyError, TypeError) as exc:
         detail = exc.detail if isinstance(exc, InvalidParamsError) else str(exc)
         raise DomainError("Project metadata is corrupt", kind="invalid_project", detail=detail) from exc
+
+
+def _create_v2_schema(connection: sqlite3.Connection) -> None:
+    statements = (
+        "CREATE TABLE IF NOT EXISTS vector_datasets ("
+        "dataset_id TEXT PRIMARY KEY, version TEXT NOT NULL, relative_path TEXT NOT NULL UNIQUE, "
+        "dataset_json TEXT NOT NULL, created_at TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS map_layers ("
+        "layer_id TEXT PRIMARY KEY, dataset_id TEXT NOT NULL REFERENCES vector_datasets(dataset_id), "
+        "name TEXT NOT NULL, visible INTEGER NOT NULL CHECK (visible IN (0, 1)), "
+        "opacity REAL NOT NULL CHECK (opacity >= 0 AND opacity <= 1), color TEXT NOT NULL, "
+        "category_field TEXT, category_colors TEXT NOT NULL, display_order INTEGER NOT NULL UNIQUE)",
+        "CREATE TABLE IF NOT EXISTS tasks ("
+        "task_id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('import', 'export')), "
+        "status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed', 'cancelled', 'interrupted')), "
+        "stage TEXT NOT NULL, completed INTEGER, total INTEGER, created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, dataset_id TEXT, destination TEXT, error TEXT)",
+        "CREATE TABLE IF NOT EXISTS pending_publications ("
+        "task_id TEXT PRIMARY KEY REFERENCES tasks(task_id), dataset_json TEXT NOT NULL, "
+        "staged_relative_path TEXT NOT NULL, final_relative_path TEXT NOT NULL, "
+        "artifact_size INTEGER NOT NULL, artifact_sha256 TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS pending_exports ("
+        "task_id TEXT PRIMARY KEY REFERENCES tasks(task_id), temporary_path TEXT NOT NULL, "
+        "destination_path TEXT NOT NULL, artifact_size INTEGER NOT NULL, artifact_sha256 TEXT NOT NULL)",
+        "CREATE TRIGGER IF NOT EXISTS vector_datasets_no_update BEFORE UPDATE ON vector_datasets "
+        "BEGIN SELECT RAISE(ABORT, 'vector datasets are immutable'); END",
+        "CREATE TRIGGER IF NOT EXISTS vector_datasets_no_delete BEFORE DELETE ON vector_datasets "
+        "BEGIN SELECT RAISE(ABORT, 'vector datasets are immutable'); END",
+    )
+    for statement in statements:
+        connection.execute(statement)
+
+
+def _validate_v2_schema(connection: sqlite3.Connection) -> None:
+    expected_columns = {
+        "vector_datasets": {"dataset_id", "version", "relative_path", "dataset_json", "created_at"},
+        "map_layers": {
+            "layer_id", "dataset_id", "name", "visible", "opacity", "color", "category_field",
+            "category_colors", "display_order",
+        },
+        "tasks": {
+            "task_id", "kind", "status", "stage", "completed", "total", "created_at", "updated_at",
+            "dataset_id", "destination", "error",
+        },
+        "pending_publications": {
+            "task_id", "dataset_json", "staged_relative_path", "final_relative_path", "artifact_size",
+            "artifact_sha256",
+        },
+        "pending_exports": {
+            "task_id", "temporary_path", "destination_path", "artifact_size", "artifact_sha256",
+        },
+    }
+    for table, columns in expected_columns.items():
+        actual = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        if actual != columns:
+            raise sqlite3.DatabaseError(f"project table {table} has an incompatible schema")
+    triggers = {row[0] for row in connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'vector_datasets'"
+    )}
+    if not {"vector_datasets_no_update", "vector_datasets_no_delete"} <= triggers:
+        raise sqlite3.DatabaseError("project dataset immutability triggers are missing")
+
+
+def _backup_v1_project(path: Path) -> Path:
+    backup_directory = path.parent / "backups"
+    backup_directory.mkdir(parents=True, exist_ok=True)
+    backup_path = backup_directory / f"project-v1-{uuid.uuid4().hex}.spa"
+    source: sqlite3.Connection | None = None
+    target: sqlite3.Connection | None = None
+    failure: Exception | None = None
+    try:
+        source = sqlite3.connect(path)
+        target = sqlite3.connect(backup_path)
+        source.backup(target)
+    except Exception as exc:
+        failure = exc
+    finally:
+        if target is not None:
+            target.close()
+        if source is not None:
+            source.close()
+    if failure is not None:
+        if backup_path.exists():
+            try:
+                backup_path.unlink()
+            except OSError:
+                pass
+        raise failure
+    _read_project(backup_path, accepted_versions=frozenset({1}))
+    connection = _connect_readonly(backup_path)
+    try:
+        if connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            raise sqlite3.DatabaseError("project backup failed integrity validation")
+    finally:
+        connection.close()
+    return backup_path
+
+
+def _migrate_v1_to_v2(path: Path) -> None:
+    connection = sqlite3.connect(path, timeout=10.0)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("BEGIN IMMEDIATE")
+        _create_v2_schema(connection)
+        _validate_v2_schema(connection)
+        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 @dataclass
@@ -186,9 +301,9 @@ class ProjectStore:
             project_id = str(uuid.uuid4())
             connection = sqlite3.connect(project_path)
             try:
-                with connection:
+                connection.execute("BEGIN IMMEDIATE")
+                try:
                     connection.execute(f"PRAGMA application_id = {APPLICATION_ID}")
-                    connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                     connection.execute(
                         "CREATE TABLE project_metadata ("
                         "singleton INTEGER PRIMARY KEY CHECK (singleton = 1), "
@@ -210,6 +325,13 @@ class ProjectStore:
                             json.dumps({"center": [114.0, 27.1], "zoom": 5.0}, separators=(",", ":")),
                         ),
                     )
+                    _create_v2_schema(connection)
+                    _validate_v2_schema(connection)
+                    connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+                    connection.commit()
+                except Exception:
+                    connection.rollback()
+                    raise
             finally:
                 connection.close()
             for child_name in OWNED_DIRECTORIES:
@@ -245,16 +367,38 @@ class ProjectStore:
         require_exact_keys(params, {"path"})
         path = require_path(params["path"], "path")
         if self._session and _same_path(path, self._session.path):
+            current = _read_project(path, accepted_versions=frozenset({1, SCHEMA_VERSION}))
+            if current["schemaVersion"] == 1:
+                try:
+                    _backup_v1_project(path)
+                    _migrate_v1_to_v2(path)
+                except (sqlite3.DatabaseError, OSError) as exc:
+                    raise DomainError(
+                        "Could not migrate project", kind="project_migration_failed", detail=str(exc)
+                    ) from exc
             return _read_project(path)
-        _read_project(path)
+        _read_project(path, accepted_versions=frozenset({1, SCHEMA_VERSION}))
         session = _acquire_lock(path)
         try:
+            candidate = _read_project(path, accepted_versions=frozenset({1, SCHEMA_VERSION}))
+            if candidate["schemaVersion"] == 1:
+                _backup_v1_project(path)
+                _migrate_v1_to_v2(path)
             project = _read_project(path)
+        except (sqlite3.DatabaseError, OSError) as exc:
+            session.close()
+            raise DomainError("Could not migrate project", kind="project_migration_failed", detail=str(exc)) from exc
         except Exception:
             session.close()
             raise
         self._replace_session(session)
         return project
+
+    def active_path(self, path: str) -> Path:
+        requested = require_path(path, "path")
+        if self._session is None or not _same_path(requested, self._session.path):
+            raise DomainError("Path is not the active project", kind="project_not_active", detail=str(requested))
+        return self._session.path
 
     def save(self, params: dict[str, Any]) -> dict[str, Any]:
         require_exact_keys(

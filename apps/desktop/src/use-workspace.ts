@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { EngineError, ProbeReport, Project, RuntimeInfo } from '../../../shared/contracts';
+import { PROTOCOL_VERSION, type EngineError, type MapLayer, type ProbeReport, type Project, type RuntimeInfo, type SourceInspection, type Task, type ViewState, type Workspace } from '../../../shared/contracts';
 import { normalizeError, type DesktopBridge } from './bridge';
 import { draftFromProject, hasUnsavedChanges, validateDirectoryName, type ProjectDraft } from './project-state';
 
@@ -9,6 +9,9 @@ export function useWorkspace(bridge: DesktopBridge) {
   const [project, setProject] = useState<Project | null>(null);
   const [draft, setDraft] = useState<ProjectDraft | null>(null);
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
+  const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [sessionId, setSessionId] = useState(0);
+  const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
   const [report, setReport] = useState<ProbeReport | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<EngineError | null>(null);
@@ -20,8 +23,22 @@ export function useWorkspace(bridge: DesktopBridge) {
   const inFlight = useRef(false);
   const projectRef = useRef<Project | null>(null);
   const recoveryRef = useRef(false);
+  const generation = useRef(0);
   projectRef.current = project;
   const dirty = hasUnsavedChanges(project, draft);
+
+  const handleFailure = useCallback((cause: unknown) => {
+    const failure = normalizeError(cause);
+    setError(failure);
+    if (failure.data?.kind?.startsWith('ENGINE_')) {
+      setRuntime(null);
+      generation.current += 1;
+      if (projectRef.current) {
+        recoveryRef.current = true;
+        setNeedsReopen(true);
+      }
+    }
+  }, []);
 
   const run = useCallback(async (label: string, action: () => Promise<void>): Promise<boolean> => {
     if (inFlight.current) return false;
@@ -33,34 +50,51 @@ export function useWorkspace(bridge: DesktopBridge) {
       await action();
       return true;
     } catch (cause) {
-      const failure = normalizeError(cause);
-      setError(failure);
-      if (failure.data?.kind?.startsWith('ENGINE_')) {
-        setRuntime(null);
-        if (projectRef.current) {
-          recoveryRef.current = true;
-          setNeedsReopen(true);
-        }
-      }
+      handleFailure(cause);
       return false;
     } finally {
       inFlight.current = false;
       setBusy(null);
     }
-  }, []);
+  }, [handleFailure]);
 
-  const acceptProject = (next: Project) => {
+  const activeProject = useCallback(() => {
+    if (!native) throw new Error('浏览器模式下本地引擎不可用。');
+    if (!projectRef.current) throw new Error('当前没有打开的项目。');
+    if (recoveryRef.current) throw new Error('引擎会话已中断，请重新打开项目。');
+    return projectRef.current;
+  }, [native]);
+
+  const loadWorkspace = useCallback(async (current: Project, token: number) => {
+    const next = await bridge.request('workspace.get', { path: current.projectPath });
+    if (generation.current !== token || projectRef.current?.id !== current.id) return;
+    if (next.projectId !== current.id) throw new Error('工作区响应与当前项目不匹配。');
+    setWorkspace(next);
+    setSelectedLayerId((selected) => next.layers.some((layer) => layer.id === selected) ? selected : next.layers[0]?.id ?? null);
+  }, [bridge]);
+
+  const refreshWorkspace = useCallback(() => run('刷新工作区', async () => {
+    await loadWorkspace(activeProject(), generation.current);
+  }), [run, loadWorkspace, activeProject]);
+
+  const acceptProject = async (next: Project) => {
+    generation.current += 1;
+    setSessionId(generation.current);
+    projectRef.current = next;
     setProject(next);
     setDraft(draftFromProject(next));
     setReport(null);
     recoveryRef.current = false;
     setNeedsReopen(false);
+    setWorkspace(null);
+    setSelectedLayerId(null);
+    await loadWorkspace(next, generation.current);
   };
 
   const connect = useCallback(() => run('连接引擎', async () => {
     setRuntime(null);
     const info = await bridge.request('runtime.info');
-    if (info.protocolVersion !== 1) throw new Error('引擎协议版本不兼容，请检查桌面应用和引擎版本。');
+    if (info.protocolVersion !== PROTOCOL_VERSION) throw new Error('引擎协议版本不兼容，请检查桌面应用和引擎版本。');
     setRuntime(info);
     setNotice(recoveryRef.current ? '引擎已重连，当前项目需要重新打开' : '本地引擎已连接');
   }), [bridge, run]);
@@ -76,8 +110,8 @@ export function useWorkspace(bridge: DesktopBridge) {
       name: draft.name.trim(),
       description: draft.description,
       analysisCrs: draft.analysisCrs.trim() || null,
-      displayCrs: project.displayCrs,
-      viewState: project.viewState,
+      displayCrs: 'EPSG:3857',
+      viewState: draft.viewState,
     });
     setProject(next);
     setDraft(draftFromProject(next));
@@ -90,7 +124,7 @@ export function useWorkspace(bridge: DesktopBridge) {
       await run('打开项目', async () => {
         const path = await bridge.chooseProject();
         if (!path || Array.isArray(path)) return;
-        acceptProject(await bridge.request('project.open', { path }));
+        await acceptProject(await bridge.request('project.open', { path }));
         setNotice('项目已打开');
       });
       return;
@@ -98,11 +132,16 @@ export function useWorkspace(bridge: DesktopBridge) {
     if (action === 'close') {
       await run('关闭项目', async () => {
         await bridge.request('project.close');
+        generation.current += 1;
+        setSessionId(generation.current);
+        projectRef.current = null;
         setProject(null);
         setDraft(null);
         setReport(null);
         recoveryRef.current = false;
         setNeedsReopen(false);
+        setWorkspace(null);
+        setSelectedLayerId(null);
         setNotice('项目已关闭');
       });
       return;
@@ -159,7 +198,7 @@ export function useWorkspace(bridge: DesktopBridge) {
     if (invalid) throw new Error(invalid);
     if (!parent) throw new Error('请选择项目父目录。');
     const directory = await bridge.join(parent, name);
-    acceptProject(await bridge.request('project.create', { directory, name }));
+    await acceptProject(await bridge.request('project.create', { directory, name }));
     setNewProject(false);
     setNotice('项目已创建');
   });
@@ -172,5 +211,90 @@ export function useWorkspace(bridge: DesktopBridge) {
     setNotice(next.ok ? '诊断检查已通过' : '诊断完成，存在未通过项');
   });
 
-  return { project, draft, setDraft, runtime, report, busy, error, notice, dirty, native, needsReopen, newProject, setNewProject, pending, requestAction, resolvePending, create, save, connect, diagnose };
+  const setView = useCallback((viewState: ViewState) => {
+    setDraft((current) => current ? { ...current, viewState } : current);
+  }, []);
+
+  const inspectSource = async (sourcePath: string, encoding: string | null): Promise<SourceInspection | null> => {
+    let result: SourceInspection | null = null;
+    await run('检查数据源', async () => {
+      activeProject();
+      result = await bridge.request('source.inspect', { sourcePath, encoding });
+    });
+    return result;
+  };
+
+  const rememberTask = useCallback((task: Task) => {
+    setWorkspace((current) => current ? { ...current, tasks: [task, ...current.tasks.filter((item) => item.id !== task.id)] } : current);
+  }, []);
+
+  const importVector = (params: { sourcePath: string; sourceLayer: string; encoding: string | null; assignedCrs: string | null }) => run('开始导入', async () => {
+    const current = activeProject();
+    const task = await bridge.request('vector.import', { path: current.projectPath, ...params });
+    rememberTask(task);
+    setNotice('导入任务已开始');
+  });
+
+  const exportVector = (datasetId: string, name: string) => run('导出 GeoPackage', async () => {
+    const current = activeProject();
+    const destination = await bridge.chooseExport(name);
+    if (!destination) return;
+    const task = await bridge.request('vector.export', { path: current.projectPath, datasetId, destination });
+    rememberTask(task);
+    setNotice('导出任务已开始');
+  });
+
+  const activeTask = workspace?.tasks.find((task) => task.status === 'running') ?? null;
+  useEffect(() => {
+    if (!activeTask || !project || needsReopen || !runtime) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const token = generation.current;
+    const poll = async () => {
+      try {
+        const next = await bridge.request('task.get', { path: project.projectPath, taskId: activeTask.id });
+        if (cancelled || token !== generation.current) return;
+        if (next.status === 'running') {
+          rememberTask(next);
+          timer = setTimeout(poll, 700);
+        }
+        else {
+          setNotice(next.status === 'completed' ? next.kind === 'import' ? '数据已导入' : 'GeoPackage 已导出' : next.error || (next.status === 'cancelled' ? '任务已取消' : '任务未完成'));
+          rememberTask(next);
+          await loadWorkspace(project, token);
+        }
+      } catch (cause) { if (!cancelled && token === generation.current) handleFailure(cause); }
+    };
+    timer = setTimeout(poll, 300);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [activeTask?.id, project?.id, needsReopen, runtime, bridge, rememberTask, loadWorkspace, handleFailure]);
+
+  const cancelTask = (taskId: string) => run('取消任务', async () => {
+    const current = activeProject();
+    rememberTask(await bridge.request('task.cancel', { path: current.projectPath, taskId }));
+    await loadWorkspace(current, generation.current);
+  });
+
+  const updateLayer = (layerId: string, changes: Partial<Pick<MapLayer, 'name' | 'visible' | 'opacity' | 'color' | 'categoryField' | 'categoryColors'>>) => run('保存图层设置', async () => {
+    const current = activeProject();
+    const next = await bridge.request('layer.update', { path: current.projectPath, layerId, changes });
+    setWorkspace((value) => value ? { ...value, layers: value.layers.map((layer) => layer.id === layerId ? next : layer) } : value);
+    setNotice('图层设置已保存');
+  });
+
+  const reorderLayers = (layerIds: string[]) => run('调整图层顺序', async () => {
+    const current = activeProject();
+    const layers = await bridge.request('layer.reorder', { path: current.projectPath, layerIds });
+    setWorkspace((value) => value ? { ...value, layers } : value);
+  });
+
+  const removeLayer = (layerId: string) => run('移除图层', async () => {
+    const current = activeProject();
+    await bridge.request('layer.remove', { path: current.projectPath, layerId });
+    await loadWorkspace(current, generation.current);
+  });
+
+  return { project, draft, setDraft, setView, sessionId, runtime, workspace, selectedLayerId, setSelectedLayerId, refreshWorkspace, activeTask, inspectSource, importVector, exportVector, cancelTask, updateLayer, reorderLayers, removeLayer, handleFailure, report, busy, error, notice, dirty, native, needsReopen, newProject, setNewProject, pending, requestAction, resolvePending, create, save, connect, diagnose };
 }
+
+export type WorkspaceState = ReturnType<typeof useWorkspace>;

@@ -5,6 +5,7 @@ import sys
 from importlib import metadata
 
 import geopandas
+import pyarrow
 import pyogrio
 import pyproj
 import rasterio
@@ -27,6 +28,7 @@ def library_versions() -> dict[str, str]:
         "gdal": pyogrio.__gdal_version_string__,
         "proj": pyproj.proj_version_str,
         "numpy": metadata.version("numpy"),
+        "pyarrow": pyarrow.__version__,
     }
 
 
@@ -56,7 +58,7 @@ def driver_capabilities() -> dict[str, str]:
 
 def runtime_info() -> dict:
     return {
-        "protocolVersion": 1,
+        "protocolVersion": 2,
         "engineVersion": __version__,
         "pythonVersion": platform.python_version(),
         "packaged": bool(getattr(sys, "frozen", False)),

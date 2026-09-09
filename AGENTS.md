@@ -4,7 +4,7 @@ Windows-first personal GIS workstation for land-use overlay and area statistics.
 
 ## Current Scope
 
-The user approved the optimized plan in docs/plan-v2.md and authorized Phase 0 development and Git deployment. Complete Phase 0 only: desktop shell, Python engine communication, project create/save/open, logging, genuine GIS diagnostics, packaging, and verification. The map is a diagnostic projection preview, not a Phase 1 GIS workspace.
+The user approved docs/plan-v2.md and has now authorized Phase 1A development and Git deployment. Deliver ordinary GPKG/SHP/GeoJSON/GDB vectors, managed snapshots, map/layers/attributes/export, cancellable import jobs and schema migration. Use synthetic acceptance data as requested. Phase 1B coordinate tables, 1C rasters, 1D consolidation and Phase 2 land overlay remain subsequent milestones. See docs/phase-1a.md and shared/contracts.ts for the current contracts.
 
 ## Engineering Rules
 
@@ -18,13 +18,14 @@ The user approved the optimized plan in docs/plan-v2.md and authorized Phase 0 d
 - Keep RPC versioned, parameter-validated and bounded. Protocol data goes to stdout; logs go to stderr/files.
 - Test project round trips, invalid/corrupt inputs, coordinate transformation and genuine GeoPackage IO. Report clean-machine verification as pending until actually run there.
 - Work in the existing feature branch; preserve remote history and user documents. Never force-push.
-- Update README, docs, and TODO for delivered behavior and limitations. Stop at the Phase 0 boundary.
+- Update README, docs, and TODO for delivered behavior and limitations. Stop at the Phase 1A boundary.
 
-## Ownership During Initial Parallel Build
+## Ownership During Phase 1A
 
-- Engine worker: gis-engine/ and local Python environment only.
-- Frontend worker: root npm manifests/config and apps/desktop/ except src-tauri/.
+- Store worker: projects.py, workspace.py, tasks.py, worker.py and related tests only.
+- Vector worker: vectors.py, vector_queries.py, pyproject.toml/uv.lock, GIS fixtures and related tests only.
+- Frontend worker: apps/desktop/src/ only.
 - Primary agent: shared/, apps/desktop/src-tauri/, scripts/, Git, CI, and integration docs.
-- Toolchain worker: local Rust installation only.
+- Primary also owns RPC routing, entry point, version coordination and end-to-end acceptance scripts.
 
 Use apply_patch for authored files. Do not overwrite another worker's files without coordinating.

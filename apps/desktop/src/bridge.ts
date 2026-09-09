@@ -1,8 +1,8 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { appCacheDir, dirname, join } from '@tauri-apps/api/path';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { open } from '@tauri-apps/plugin-dialog';
-import type { EngineError, EngineMethod, ProbeReport, Project, RuntimeInfo } from '../../../shared/contracts';
+import { open, save } from '@tauri-apps/plugin-dialog';
+import type { AttributePage, EngineError, EngineMethod, FeatureResult, MapLayer, ProbeReport, Project, RuntimeInfo, SourceInspection, Task, ViewportResult, Workspace } from '../../../shared/contracts';
 
 interface EngineResults {
   'runtime.info': RuntimeInfo;
@@ -11,6 +11,18 @@ interface EngineResults {
   'project.save': Project;
   'project.close': { closed: true };
   'diagnostics.run': ProbeReport;
+  'source.inspect': SourceInspection;
+  'workspace.get': Workspace;
+  'vector.import': Task;
+  'vector.export': Task;
+  'task.get': Task;
+  'task.cancel': Task;
+  'layer.update': MapLayer;
+  'layer.reorder': MapLayer[];
+  'layer.remove': { removed: true };
+  'vector.page': AttributePage;
+  'vector.viewport': ViewportResult;
+  'vector.feature': FeatureResult;
 }
 
 export function normalizeError(error: unknown): EngineError {
@@ -51,6 +63,9 @@ export const desktop = {
   request: engineRequest,
   chooseParent: () => open({ directory: true, multiple: false, title: '选择新项目的父目录' }),
   chooseProject: () => open({ multiple: false, directory: false, title: '打开项目', filters: [{ name: 'Spatial Analysis 项目', extensions: ['spa'] }] }),
+  chooseVector: () => open({ multiple: false, directory: false, title: '导入矢量数据', filters: [{ name: '矢量数据', extensions: ['gpkg', 'shp', 'geojson', 'json'] }] }),
+  chooseGdb: () => open({ multiple: false, directory: true, title: '选择 File Geodatabase (.gdb)' }),
+  chooseExport: (name: string) => save({ title: '导出 GeoPackage', defaultPath: `${name.replace(/[<>:"/\\|?*]/g, '_')}.gpkg`, filters: [{ name: 'GeoPackage', extensions: ['gpkg'] }] }),
   join,
   diagnosticDirectory: async (projectPath?: string) => projectPath
     ? join(await dirname(projectPath), 'cache')

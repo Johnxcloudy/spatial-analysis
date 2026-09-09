@@ -113,14 +113,14 @@ try {
     $reopened = $responses[4].result
     $diagnostics = $responses[5].result
     Assert-SmokeCheck 'runtime.packaged' ($runtime.packaged -is [bool] -and $runtime.packaged) 'The engine must report packaged=true.'
-    Assert-SmokeCheck 'runtime.protocolVersion' ($runtime.protocolVersion -eq 1) 'The engine must report protocolVersion=1.'
+    Assert-SmokeCheck 'runtime.protocolVersion' ($runtime.protocolVersion -eq 2) 'The engine must report protocolVersion=2.'
     Assert-SmokeCheck 'project.identity' (-not [string]::IsNullOrWhiteSpace($created.id)) 'Created project must have a nonempty identity.'
     foreach ($entry in @{ saved = $saved; reopened = $reopened }.GetEnumerator()) {
         $project = $entry.Value
         $prefix = "project.$($entry.Key)"
         Assert-SmokeCheck "$prefix.identity" ($project.id -ceq $created.id) 'Project identity must survive save and reopen.'
         Assert-SmokeCheck "$prefix.createdAt" ($project.createdAt -ceq $created.createdAt) 'Creation time must survive save and reopen.'
-        Assert-SmokeCheck "$prefix.schemaVersion" ($project.schemaVersion -eq 1) 'Project schema must remain version 1.'
+        Assert-SmokeCheck "$prefix.schemaVersion" ($project.schemaVersion -eq 2) 'Project schema must remain version 2.'
         Assert-SmokeCheck "$prefix.path" ([string]::Equals($project.projectPath, $projectPath, [StringComparison]::OrdinalIgnoreCase)) 'Project must remain at the requested project.spa path.'
         foreach ($field in @('name', 'description', 'analysisCrs', 'displayCrs')) {
             Assert-SmokeCheck "$prefix.$field" ($project.$field -ceq $savedFields[$field]) "Saved field '$field' must match the requested value."

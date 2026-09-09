@@ -32,6 +32,18 @@ pub fn validate_request(method: &str, params: &Value) -> Result<(), EngineError>
             | "project.save"
             | "project.close"
             | "diagnostics.run"
+            | "source.inspect"
+            | "workspace.get"
+            | "vector.import"
+            | "vector.export"
+            | "task.get"
+            | "task.cancel"
+            | "layer.update"
+            | "layer.reorder"
+            | "layer.remove"
+            | "vector.page"
+            | "vector.viewport"
+            | "vector.feature"
     ) {
         return Err(EngineError {
             code: -32601,

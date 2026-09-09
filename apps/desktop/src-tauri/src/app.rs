@@ -6,6 +6,28 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, State};
 
+async fn wait_for_task(
+    app: &AppHandle,
+    engine: &EngineManager,
+    path: &Value,
+    mut task: Value,
+) -> Result<Value, EngineError> {
+    for _ in 0..600 {
+        if task["status"] != "running" {
+            return if task["status"] == "completed" {
+                Ok(task)
+            } else {
+                Err(EngineError::local("SMOKE_TASK_FAILED", task.to_string()))
+            };
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        task = engine
+            .request(app, "task.get", json!({"path":path,"taskId":task["id"]}))
+            .await?;
+    }
+    Err(EngineError::local("SMOKE_TASK_TIMEOUT", task.to_string()))
+}
+
 #[tauri::command]
 async fn engine_request(
     app: AppHandle,
@@ -24,12 +46,12 @@ async fn smoke_test(app: &AppHandle, directory: &std::path::Path) -> Result<Valu
         .request(
             app,
             "project.create",
-            json!({"directory":project_directory,"name":"Phase 0 本地验证"}),
+            json!({"directory":project_directory,"name":"Phase 1A 本地验证"}),
         )
         .await?;
     let path = created["projectPath"].clone();
     let saved = engine.request(app, "project.save", json!({
-        "path":path,"name":"Phase 0 本地验证","description":"Native bridge saved successfully",
+        "path":path,"name":"Phase 1A 本地验证","description":"Native bridge saved successfully",
         "analysisCrs":"EPSG:4547","displayCrs":created["displayCrs"],"viewState":created["viewState"]
     })).await?;
     engine.request(app, "project.close", json!({})).await?;
@@ -49,15 +71,96 @@ async fn smoke_test(app: &AppHandle, directory: &std::path::Path) -> Result<Valu
             json!({"directory":directory.join("diagnostics")}),
         )
         .await?;
-    engine.request(app, "project.close", json!({})).await?;
     if report["ok"] != true {
         return Err(EngineError::local(
             "SMOKE_DIAGNOSTICS_FAILED",
             report.to_string(),
         ));
     }
+    let source = engine
+        .request(
+            app,
+            "source.inspect",
+            json!({"sourcePath":report["geopackagePath"],"encoding":null}),
+        )
+        .await?;
+    let import_task = engine
+        .request(
+            app,
+            "vector.import",
+            json!({
+                "path":path,"sourcePath":report["geopackagePath"],"sourceLayer":"source",
+                "encoding":null,"assignedCrs":null
+            }),
+        )
+        .await?;
+    let imported = wait_for_task(app, &engine, &path, import_task).await?;
+    let workspace = engine
+        .request(app, "workspace.get", json!({"path":path}))
+        .await?;
+    let dataset = &workspace["datasets"][0];
+    if workspace["datasets"].as_array().map(Vec::len) != Some(1)
+        || dataset["id"] != imported["datasetId"]
+        || dataset["featureCount"] != 1
+    {
+        return Err(EngineError::local(
+            "SMOKE_IMPORT_MISMATCH",
+            workspace.to_string(),
+        ));
+    }
+    let attributes = engine
+        .request(
+            app,
+            "vector.page",
+            json!({
+                "path":path,"datasetId":dataset["id"],"offset":0,"limit":200,
+                "sortField":null,"descending":false,"filter":null
+            }),
+        )
+        .await?;
+    let viewport = engine
+        .request(
+            app,
+            "vector.viewport",
+            json!({
+                "path":path,"datasetId":dataset["id"],"bbox":dataset["boundsWgs84"],
+                "limit":2000,"propertyFields":[]
+            }),
+        )
+        .await?;
+    if attributes["total"] != 1 || viewport["returnedCount"] != 1 {
+        return Err(EngineError::local(
+            "SMOKE_QUERY_MISMATCH",
+            json!({"attributes":attributes,"viewport":viewport}).to_string(),
+        ));
+    }
+    let export_task = engine
+        .request(
+            app,
+            "vector.export",
+            json!({
+                "path":path,"datasetId":dataset["id"],"destination":directory.join("export.gpkg")
+            }),
+        )
+        .await?;
+    let exported = wait_for_task(app, &engine, &path, export_task).await?;
+    engine.request(app, "project.close", json!({})).await?;
+    engine
+        .request(app, "project.open", json!({"path":path}))
+        .await?;
+    let restored = engine
+        .request(app, "workspace.get", json!({"path":path}))
+        .await?;
+    engine.request(app, "project.close", json!({})).await?;
+    if restored["datasets"] != workspace["datasets"] || restored["layers"] != workspace["layers"] {
+        return Err(EngineError::local(
+            "SMOKE_WORKSPACE_MISMATCH",
+            restored.to_string(),
+        ));
+    }
     Ok(
-        json!({"ok":true,"runtime":runtime,"created":created,"reopened":reopened,"diagnostics":report}),
+        json!({"ok":true,"runtime":runtime,"created":created,"reopened":reopened,"diagnostics":report,
+            "source":source,"workspace":restored,"attributes":attributes,"viewport":viewport,"exported":exported}),
     )
 }
 

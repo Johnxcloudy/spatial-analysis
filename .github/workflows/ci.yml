@@ -55,6 +55,11 @@ jobs:
       - name: Test engine
         run: uv run --project gis-engine --frozen --group dev python -m pytest gis-engine/tests
 
+      - name: Verify vector workflow through persistent RPC
+        run: |
+          uv run --project gis-engine --frozen python scripts/generate-vector-fixtures.py .artifacts/vector-fixtures
+          uv run --project gis-engine --frozen python scripts/verify-vectors.py --output .artifacts/vectors-source-ci --fixtures .artifacts/vector-fixtures/manifest.json
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all -- --check
 
@@ -68,6 +73,7 @@ jobs:
         run: |
           $engine = (Resolve-Path 'apps/desktop/src-tauri/resources/engine/spatial-engine.exe').Path
           ./scripts/smoke-engine.ps1 -Executable $engine -OutputDirectory '.artifacts/frozen-engine/ci'
+          uv run --project gis-engine --frozen python scripts/verify-vectors.py --executable $engine --output .artifacts/vectors-frozen-ci --fixtures .artifacts/vector-fixtures/manifest.json
 
       - name: Build Windows installer
         run: npm run tauri -- build
@@ -78,9 +84,9 @@ jobs:
           $outputDirectory = Join-Path $env:RUNNER_TEMP ('spatial-analysis-native-' + [guid]::NewGuid().ToString('N'))
           $process = Start-Process -FilePath $executable -ArgumentList @('--smoke-test', ('"' + $outputDirectory + '"')) -WindowStyle Hidden -PassThru
           try {
-              if (-not $process.WaitForExit(180000)) {
+              if (-not $process.WaitForExit(300000)) {
                   Stop-Process -Id $process.Id -ErrorAction SilentlyContinue
-                  throw 'Native smoke test exceeded the 180-second deadline.'
+                  throw 'Native smoke test exceeded the 300-second deadline.'
               }
               if ($process.ExitCode -ne 0) { throw "Native smoke test exited with code $($process.ExitCode)." }
           } finally { $process.Dispose() }
@@ -102,4 +108,6 @@ jobs:
             apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
             .artifacts/frozen-engine/**/*.json
             .artifacts/frozen-engine/**/*.log
+            .artifacts/vectors-*/**/*.json
+            .artifacts/vectors-*/**/*.log
             ${{ runner.temp }}/spatial-analysis-native-*/**/*.json

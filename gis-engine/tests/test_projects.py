@@ -30,14 +30,14 @@ def test_project_create_save_close_open_round_trip(tmp_path: Path) -> None:
     project_dir = tmp_path / "含空格 project"
 
     created = engine.dispatch("project.create", {"directory": str(project_dir), "name": "Land study"})
-    assert created["schemaVersion"] == 1
+    assert created["schemaVersion"] == 2
     assert created["name"] == "Land study"
     assert created["description"] == ""
     assert created["analysisCrs"] is None
     assert created["displayCrs"] == "EPSG:3857"
     assert created["viewState"] == {"center": [114.0, 27.1], "zoom": 5.0}
     assert set(path.name for path in project_dir.iterdir()) >= {
-        "project.spa", "datasets", "rasters", "results", "staging", "cache"
+        "project.spa", "datasets", "rasters", "results", "staging", "cache", "backups"
     }
 
     with sqlite3.connect(project_dir / "project.spa") as connection:
@@ -166,6 +166,62 @@ def test_open_rejects_future_schema_without_modifying_file(tmp_path: Path) -> No
 
     assert error.value.kind == "unsupported_schema"
     assert project_path.read_bytes() == before
+
+
+def test_open_migrates_v1_after_creating_a_valid_backup(tmp_path: Path) -> None:
+    creator = Engine()
+    created = creator.dispatch("project.create", {"directory": str(tmp_path / "legacy"), "name": "Legacy"})
+    creator.close()
+    project_path = Path(created["projectPath"])
+    with sqlite3.connect(project_path) as connection:
+        connection.execute("DROP TRIGGER IF EXISTS vector_datasets_no_update")
+        connection.execute("DROP TRIGGER IF EXISTS vector_datasets_no_delete")
+        connection.execute("DROP TABLE IF EXISTS pending_publications")
+        connection.execute("DROP TABLE IF EXISTS map_layers")
+        connection.execute("DROP TABLE IF EXISTS vector_datasets")
+        connection.execute("DROP TABLE IF EXISTS tasks")
+        connection.execute("PRAGMA user_version = 1")
+
+    opened = Engine().dispatch("project.open", {"path": str(project_path)})
+
+    assert opened["schemaVersion"] == 2
+    backups = list((project_path.parent / "backups").glob("*.spa"))
+    assert len(backups) == 1
+    with sqlite3.connect(backups[0]) as backup:
+        assert backup.execute("PRAGMA application_id").fetchone()[0] == APPLICATION_ID
+        assert backup.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert backup.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+
+
+def test_failed_migration_rolls_back_releases_lock_and_keeps_active_project(
+    tmp_path: Path, monkeypatch
+) -> None:
+    engine = Engine()
+    active = engine.dispatch("project.create", {"directory": str(tmp_path / "active"), "name": "Active"})
+    legacy_creator = Engine()
+    legacy = legacy_creator.dispatch("project.create", {"directory": str(tmp_path / "legacy"), "name": "Legacy"})
+    legacy_creator.close()
+    legacy_path = Path(legacy["projectPath"])
+    with sqlite3.connect(legacy_path) as connection:
+        connection.execute("PRAGMA user_version = 1")
+
+    real_migrate = project_module._migrate_v1_to_v2
+
+    def fail_migration(path: Path) -> None:
+        raise sqlite3.OperationalError("injected migration failure")
+
+    monkeypatch.setattr(project_module, "_migrate_v1_to_v2", fail_migration)
+    with pytest.raises(DomainError) as error:
+        engine.dispatch("project.open", {"path": str(legacy_path)})
+    assert error.value.kind == "project_migration_failed"
+    assert engine.dispatch("project.save", valid_save(active, name="Still active"))["name"] == "Still active"
+    with sqlite3.connect(legacy_path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+
+    monkeypatch.setattr(project_module, "_migrate_v1_to_v2", real_migrate)
+    contender = Engine()
+    assert contender.dispatch("project.open", {"path": str(legacy_path)})["schemaVersion"] == 2
+    contender.close()
 
 
 @pytest.mark.parametrize(

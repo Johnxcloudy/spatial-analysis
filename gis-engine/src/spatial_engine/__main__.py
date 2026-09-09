@@ -5,12 +5,15 @@ import json
 import logging
 import math
 import sys
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from .errors import EngineError
-from .rpc import Engine, handle_request
+if TYPE_CHECKING:
+    from .rpc import Engine
 
 MAX_REQUEST_BYTES = 1024 * 1024
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_ERROR_DETAIL_LENGTH = 512
 
 
@@ -58,11 +61,20 @@ def _write_response(response: dict) -> None:
             },
         }
         serialized = json.dumps(fallback, ensure_ascii=True, separators=(",", ":"), allow_nan=False)
+    # ASCII serialization makes character length equal to the UTF-8 wire size.
+    if len(serialized) + 1 > MAX_RESPONSE_BYTES:
+        serialized = json.dumps({
+            "jsonrpc": "2.0", "id": response.get("id"),
+            "error": {"code": -32000, "message": "Response exceeds size limit",
+                      "data": {"kind": "response_too_large"}},
+        }, ensure_ascii=True, separators=(",", ":"))
     sys.stdout.buffer.write((serialized + "\n").encode("utf-8"))
     sys.stdout.buffer.flush()
 
 
 def _process_raw(engine: Engine, raw: str) -> dict:
+    from .rpc import handle_request
+
     try:
         request = _parse_json(raw)
     except (json.JSONDecodeError, ValueError, RecursionError) as exc:
@@ -94,7 +106,16 @@ def _serve_stdio(engine: Engine) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="spatial-engine")
     parser.add_argument("--request", help="process one JSON-RPC request and exit")
+    parser.add_argument("--worker", help="execute a managed GIS job request file")
     arguments = parser.parse_args(argv)
+    if arguments.worker is not None:
+        from .resources import configure_native_data_paths
+        from .worker import run_worker
+
+        configure_native_data_paths()
+        return run_worker(Path(arguments.worker))
+    from .rpc import Engine
+
     engine = Engine()
     try:
         if arguments.request is not None:

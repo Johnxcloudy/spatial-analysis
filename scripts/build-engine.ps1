@@ -8,7 +8,7 @@ try {
         & uv sync --project $engineRoot --frozen --group dev
         if ($LASTEXITCODE -ne 0) { throw 'Python dependency installation failed.' }
     }
-    & uv run --project $engineRoot --frozen --group dev python -m PyInstaller --noconfirm --clean --onedir --console --name spatial-engine --distpath (Join-Path $engineRoot 'dist') --workpath (Join-Path $engineRoot 'build') --specpath (Join-Path $engineRoot 'build') --paths (Join-Path $engineRoot 'src') --additional-hooks-dir (Join-Path $PSScriptRoot 'pyinstaller-hooks') --copy-metadata numpy --exclude-module pytest (Join-Path $PSScriptRoot 'engine-entry.py')
+    & uv run --project $engineRoot --frozen --group dev python -m PyInstaller --noconfirm --clean --onedir --console --name spatial-engine --distpath (Join-Path $engineRoot 'dist') --workpath (Join-Path $engineRoot 'build') --specpath (Join-Path $engineRoot 'build') --paths (Join-Path $engineRoot 'src') --additional-hooks-dir (Join-Path $PSScriptRoot 'pyinstaller-hooks') --copy-metadata numpy --copy-metadata pyarrow --exclude-module pytest (Join-Path $PSScriptRoot 'engine-entry.py')
     if ($LASTEXITCODE -ne 0) { throw 'GIS engine packaging failed.' }
     $source = Join-Path $engineRoot 'dist\spatial-engine'
     $destination = Join-Path $root 'apps\desktop\src-tauri\resources\engine'

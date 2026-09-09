@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 1 as const;
+export const PROTOCOL_VERSION = 2 as const;
 
 export interface ViewState {
   center: [number, number];
@@ -11,7 +11,7 @@ export interface Project {
   description: string;
   createdAt: string;
   updatedAt: string;
-  schemaVersion: 1;
+  schemaVersion: 2;
   projectPath: string;
   analysisCrs: string | null;
   displayCrs: string;
@@ -19,7 +19,7 @@ export interface Project {
 }
 
 export interface RuntimeInfo {
-  protocolVersion: 1;
+  protocolVersion: 2;
   engineVersion: string;
   pythonVersion: string;
   packaged: boolean;
@@ -71,4 +71,167 @@ export type EngineMethod =
   | "project.open"
   | "project.save"
   | "project.close"
-  | "diagnostics.run";
+  | "diagnostics.run"
+  | "source.inspect"
+  | "workspace.get"
+  | "vector.import"
+  | "vector.export"
+  | "task.get"
+  | "task.cancel"
+  | "layer.update"
+  | "layer.reorder"
+  | "layer.remove"
+  | "vector.page"
+  | "vector.viewport"
+  | "vector.feature";
+
+export type Bounds = [number, number, number, number];
+export type FieldValue = string | number | boolean | null;
+
+export interface VectorField {
+  name: string;
+  sourceType: string;
+  storageType: string;
+  nullable: boolean | null;
+  alias: string | null;
+  width: number | null;
+  precision: number | null;
+  metadataStatus: "not_read" | "partial";
+}
+
+export interface SourceLayer {
+  name: string;
+  geometryType: string | null;
+  featureCount: number | null;
+  crsWkt: string | null;
+  crsAuthority: string | null;
+  fields: VectorField[];
+  bounds: Bounds | null;
+}
+
+export interface SourceInspection {
+  sourcePath: string;
+  driver: string;
+  layers: SourceLayer[];
+  warnings: string[];
+}
+
+export interface ImportReport {
+  status: "warning" | "restricted";
+  checks: { code: string; passed: boolean; detail: string; count?: number }[];
+  warnings: string[];
+  notChecked: string[];
+  counts: Record<string, number>;
+  validatorVersion: string;
+}
+
+export interface VectorDataset {
+  id: string;
+  version: string;
+  name: string;
+  kind: "vector";
+  source: {
+    path: string;
+    layer: string;
+    driver: string;
+    fingerprint: string;
+    encoding: string | null;
+    assignedCrs: string | null;
+    crsWkt: string | null;
+    metadata: Record<string, string>;
+  };
+  relativePath: string;
+  storageLayer: string;
+  featureCount: number;
+  geometryType: string;
+  crsWkt: string | null;
+  crsAuthority: string | null;
+  bounds: Bounds | null;
+  boundsWgs84: Bounds | null;
+  fields: VectorField[];
+  internalIdField: string;
+  sourceFidField: string;
+  report: ImportReport;
+  createdAt: string;
+}
+
+export interface MapLayer {
+  id: string;
+  datasetId: string;
+  name: string;
+  visible: boolean;
+  opacity: number;
+  color: string;
+  categoryField: string | null;
+  categoryColors: Record<string, string>;
+  order: number;
+}
+
+export interface Task {
+  id: string;
+  kind: "import" | "export";
+  status: "running" | "completed" | "failed" | "cancelled" | "interrupted";
+  stage: string;
+  completed: number | null;
+  total: number | null;
+  createdAt: string;
+  updatedAt: string;
+  datasetId: string | null;
+  destination: string | null;
+  error: string | null;
+}
+
+export interface Workspace {
+  projectId: string;
+  datasets: VectorDataset[];
+  layers: MapLayer[];
+  tasks: Task[];
+}
+
+export interface AttributeFilter {
+  field: string;
+  operator: "contains" | "equals" | "isNull";
+  value: string;
+}
+
+export interface AttributeRow {
+  id: string;
+  values: Record<string, FieldValue>;
+}
+
+export interface AttributePage {
+  datasetId: string;
+  version: string;
+  fields: VectorField[];
+  rows: AttributeRow[];
+  total: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
+  truncated: boolean;
+}
+
+export interface DisplayFeature {
+  type: "Feature";
+  id: string;
+  properties: Record<string, FieldValue>;
+  geometry: { type: string; coordinates?: unknown; geometries?: unknown[] } | null;
+}
+
+export interface ViewportResult {
+  datasetId: string;
+  version: string;
+  bbox: Bounds;
+  dataCrs: "EPSG:4326";
+  collection: { type: "FeatureCollection"; features: DisplayFeature[] };
+  truncated: boolean;
+  returnedCount: number;
+}
+
+export interface FeatureResult {
+  datasetId: string;
+  version: string;
+  row: AttributeRow;
+  feature: DisplayFeature | null;
+  boundsWgs84: Bounds | null;
+}

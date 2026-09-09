@@ -9,6 +9,9 @@ from .logging_config import configure_logging
 from .projects import ProjectStore
 from .resources import configure_native_data_paths
 from .runtime import runtime_info
+from .tasks import TaskManager
+from .workspace import WorkspaceStore
+from . import vector_queries, vectors
 from .validation import require_exact_keys, require_object
 
 ALLOWED_METHODS = {
@@ -18,6 +21,18 @@ ALLOWED_METHODS = {
     "project.save",
     "project.close",
     "diagnostics.run",
+    "source.inspect",
+    "workspace.get",
+    "vector.import",
+    "vector.export",
+    "task.get",
+    "task.cancel",
+    "layer.update",
+    "layer.reorder",
+    "layer.remove",
+    "vector.page",
+    "vector.viewport",
+    "vector.feature",
 }
 
 
@@ -26,6 +41,8 @@ class Engine:
         configure_native_data_paths()
         self.logger = configure_logging()
         self.projects = ProjectStore()
+        self.workspace = WorkspaceStore(self.projects)
+        self.tasks = TaskManager(self.projects, self.workspace)
         self.logger.info("Engine started")
 
     def dispatch(self, method: str, params: Any) -> Any:
@@ -37,19 +54,57 @@ class Engine:
             require_exact_keys(values, set())
             return runtime_info()
         if method == "project.create":
+            self.tasks.close()
             return self.projects.create(values)
         if method == "project.open":
+            self.tasks.close()
             return self.projects.open(values)
         if method == "project.save":
             return self.projects.save(values)
         if method == "project.close":
             require_exact_keys(values, set())
+            self.tasks.close()
             return self.projects.close()
         if method == "diagnostics.run":
             return run_diagnostics(values)
+        if method == "source.inspect":
+            return vectors.inspect_source(values)
+        if method == "workspace.get":
+            self.projects.active_path(values.get("path"))
+            self.tasks.harvest()
+            return self.workspace.get(values)
+        if method == "vector.import":
+            return self.tasks.start_import(values)
+        if method == "vector.export":
+            return self.tasks.start_export(values)
+        if method == "task.get":
+            return self.tasks.get(values)
+        if method == "task.cancel":
+            return self.tasks.cancel(values)
+        if method == "layer.update":
+            return self.workspace.update_layer(values)
+        if method == "layer.reorder":
+            return self.workspace.reorder_layers(values)
+        if method == "layer.remove":
+            return self.workspace.remove_layer(values)
+        queries = {
+            "vector.page": vector_queries.attribute_page,
+            "vector.viewport": vector_queries.viewport,
+            "vector.feature": vector_queries.feature,
+        }
+        if method in queries:
+            keys = {
+                "vector.page": {"path", "datasetId", "offset", "limit", "sortField", "descending", "filter"},
+                "vector.viewport": {"path", "datasetId", "bbox", "limit", "propertyFields"},
+                "vector.feature": {"path", "datasetId", "featureId"},
+            }
+            require_exact_keys(values, keys[method])
+            dataset = self.workspace.dataset(values.get("path"), values.get("datasetId"))
+            return queries[method](dataset, self.workspace.managed_path(dataset), values)
         raise MethodNotFoundError()
 
     def close(self) -> None:
+        self.tasks.close()
         self.projects.close()
 
     def __del__(self) -> None:

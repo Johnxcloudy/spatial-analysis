@@ -1,19 +1,24 @@
-import type { Project } from '../../../shared/contracts';
+import type { Project, ViewState } from '../../../shared/contracts';
 
 export interface ProjectDraft {
   name: string;
   description: string;
   analysisCrs: string;
+  viewState: ViewState;
 }
 
 export const draftFromProject = (project: Project): ProjectDraft => ({
   name: project.name,
   description: project.description,
   analysisCrs: project.analysisCrs ?? '',
+  viewState: { center: [...project.viewState.center], zoom: project.viewState.zoom },
 });
 
 export const hasUnsavedChanges = (project: Project | null, draft: ProjectDraft | null): boolean => !!project && !!draft && (
-  project.name !== draft.name || project.description !== draft.description || (project.analysisCrs ?? '') !== draft.analysisCrs
+  project.name !== draft.name || project.description !== draft.description || (project.analysisCrs ?? '') !== draft.analysisCrs ||
+  Math.abs(project.viewState.center[0] - draft.viewState.center[0]) > 1e-8 ||
+  Math.abs(project.viewState.center[1] - draft.viewState.center[1]) > 1e-8 ||
+  Math.abs(project.viewState.zoom - draft.viewState.zoom) > 1e-6
 );
 
 export function validateDirectoryName(name: string): string | null {

@@ -13,8 +13,8 @@ def test_runtime_info_matches_contract(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
     result = Engine().dispatch("runtime.info", {})
 
-    assert result["protocolVersion"] == 1
-    assert result["engineVersion"] == "0.1.0"
+    assert result["protocolVersion"] == 2
+    assert result["engineVersion"] == "0.2.0"
     assert result["pythonVersion"].startswith("3.12")
     assert isinstance(result["packaged"], bool)
     assert {"geopandas", "shapely", "pyogrio", "pyproj", "rasterio"} <= result["versions"].keys()
@@ -127,7 +127,8 @@ def test_persistent_stdio_handles_deep_json_then_next_request(tmp_path: Path) ->
     assert completed.returncode == 0
     assert len(lines) == 2
     assert len(lines[0].encode("utf-8")) < 2_048
-    assert json.loads(lines[0])["error"]["code"] == -32700
+    # Parser recursion limits vary; a parsed array is an invalid RPC request.
+    assert json.loads(lines[0])["error"]["code"] in {-32700, -32600}
     assert json.loads(lines[0])["id"] is None
     assert json.loads(lines[1]) == {"jsonrpc": "2.0", "id": 4, "result": {"closed": True}}
 

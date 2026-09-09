@@ -4,16 +4,18 @@ import App from './App';
 import type { DesktopBridge } from './bridge';
 import { useWorkspace } from './use-workspace';
 import { validateDirectoryName } from './project-state';
-import type { EngineMethod, ProbeReport, Project, RuntimeInfo } from '../../../shared/contracts';
+import type { EngineMethod, ProbeReport, Project, RuntimeInfo, Task } from '../../../shared/contracts';
+
+vi.mock('./components/VectorMap', () => ({ VectorMap: () => <div data-testid="vector-map" /> }));
 
 const project: Project = {
-  id: 'test-project', name: '用地检查', description: '', schemaVersion: 1,
+  id: 'test-project', name: '用地检查', description: '', schemaVersion: 2,
   createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z',
   projectPath: 'C:/test/用地检查/project.spa', analysisCrs: null, displayCrs: 'EPSG:3857',
   viewState: { center: [114, 27.1], zoom: 5 },
 };
 const runtime: RuntimeInfo = {
-  protocolVersion: 1, engineVersion: '0.1.0', pythonVersion: 'test-python', packaged: false,
+  protocolVersion: 2, engineVersion: '0.2.0', pythonVersion: 'test-python', packaged: false,
   versions: { GDAL: 'test-gdal' }, drivers: { GPKG: 'test-driver' }, logPath: 'C:/test/engine.log',
 };
 const report: ProbeReport = {
@@ -26,6 +28,7 @@ const report: ProbeReport = {
 
 function fixtureBridge(native = true) {
   let closeHandler: ((preventDefault: () => void) => void) | undefined;
+  let tasks: Task[] = [];
   const request = vi.fn(async (method: EngineMethod, params: Record<string, unknown> = {}) => {
     switch (method) {
       case 'runtime.info': return runtime;
@@ -33,6 +36,17 @@ function fixtureBridge(native = true) {
       case 'project.open': return { ...project };
       case 'project.save': return { ...project, ...params, updatedAt: '2026-09-09T01:00:00Z' };
       case 'project.close': return { closed: true as const };
+      case 'workspace.get': return { projectId: project.id, datasets: [], layers: [], tasks };
+      case 'vector.import': {
+        const task: Task = { id: 'import-1', kind: 'import', status: 'running', stage: 'inspect', completed: null, total: null, createdAt: project.createdAt, updatedAt: project.createdAt, datasetId: null, destination: null, error: null };
+        tasks = [task];
+        return task;
+      }
+      case 'task.get': return tasks.find((task) => task.id === params.taskId);
+      case 'task.cancel': {
+        tasks = tasks.map((task) => task.id === params.taskId ? { ...task, status: 'cancelled' as const, stage: 'cancelled' } : task);
+        return tasks.find((task) => task.id === params.taskId);
+      }
       case 'diagnostics.run': return report;
     }
   });
@@ -41,6 +55,9 @@ function fixtureBridge(native = true) {
     request: request as DesktopBridge['request'],
     chooseParent: vi.fn(async () => 'C:/test'),
     chooseProject: vi.fn(async () => project.projectPath),
+    chooseVector: vi.fn(async () => 'C:/test/land.gpkg'),
+    chooseGdb: vi.fn(async () => 'C:/test/land.gdb'),
+    chooseExport: vi.fn(async () => 'C:/test/export.gpkg'),
     join: vi.fn(async (...paths: string[]) => paths.join('/')),
     diagnosticDirectory: vi.fn(async (path?: string) => path ? 'C:/test/用地检查/cache' : 'C:/test/app-cache'),
     onClose: vi.fn(async (handler) => { closeHandler = handler; return () => undefined; }),
@@ -66,7 +83,7 @@ describe('project transitions', () => {
     render(<App bridge={bridge} />);
     expect(screen.getByText(/浏览器模式下本地引擎不可用/)).toBeTruthy();
     expect(screen.getByRole('button', { name: '新建项目' }).hasAttribute('disabled')).toBe(true);
-    expect(screen.getByRole('button', { name: '运行验证' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: '导入数据' }).hasAttribute('disabled')).toBe(true);
     expect(request).not.toHaveBeenCalled();
     expect(screen.queryByText('10,000')).toBeNull();
   });
@@ -175,6 +192,53 @@ describe('project transitions', () => {
     expect(bridge.diagnosticDirectory).toHaveBeenCalledWith(project.projectPath);
     expect(request).toHaveBeenCalledWith('diagnostics.run', { directory: 'C:/test/用地检查/cache' });
     expect(result.current.report).toEqual(report);
+  });
+
+  it('refreshes workspace without replacing unsaved metadata or map view', async () => {
+    const { result, request } = await openFixture();
+    await act(async () => result.current.setDraft({ ...result.current.draft!, description: 'unsaved description' }));
+    await act(async () => result.current.setView({ center: [113, 28], zoom: 9 }));
+    await act(async () => { await result.current.refreshWorkspace(); });
+    expect(request).toHaveBeenLastCalledWith('workspace.get', { path: project.projectPath });
+    expect(result.current.draft?.description).toBe('unsaved description');
+    expect(result.current.draft?.viewState).toEqual({ center: [113, 28], zoom: 9 });
+    expect(result.current.dirty).toBe(true);
+  });
+
+  it('persists map view and resets the session when reopening the same project', async () => {
+    const { result, request } = await openFixture();
+    const firstSession = result.current.sessionId;
+    await act(async () => result.current.setView({ center: [113, 28], zoom: 9 }));
+    await act(async () => { await result.current.save(); });
+    expect(request).toHaveBeenCalledWith('project.save', expect.objectContaining({ displayCrs: 'EPSG:3857', viewState: { center: [113, 28], zoom: 9 } }));
+    expect(result.current.dirty).toBe(false);
+    await act(async () => result.current.requestAction('open'));
+    await waitFor(() => expect(result.current.sessionId).toBeGreaterThan(firstSession));
+    expect(result.current.draft?.viewState).toEqual(project.viewState);
+  });
+
+  it('starts and cancels an import using the current project path and real task state', async () => {
+    const { result, request } = await openFixture();
+    const source = { sourcePath: 'C:/test/land.gpkg', sourceLayer: 'land', encoding: null, assignedCrs: null };
+    await act(async () => { await result.current.importVector(source); });
+    expect(request).toHaveBeenCalledWith('vector.import', { path: project.projectPath, ...source });
+    expect(result.current.activeTask).toMatchObject({ id: 'import-1', total: null, completed: null });
+    await act(async () => { await result.current.cancelTask('import-1'); });
+    expect(request).toHaveBeenCalledWith('task.cancel', { path: project.projectPath, taskId: 'import-1' });
+    expect(result.current.activeTask).toBeNull();
+    expect(result.current.workspace?.tasks[0].status).toBe('cancelled');
+  });
+
+  it('blocks import, layer updates and refresh until the failed project is reopened', async () => {
+    const { result, request } = await openFixture();
+    await act(async () => result.current.handleFailure({ code: -32000, message: 'engine stopped', data: { kind: 'ENGINE_DISCONNECTED' } }));
+    await act(async () => { await result.current.connect(); });
+    const count = request.mock.calls.length;
+    await act(async () => { await result.current.importVector({ sourcePath: 'C:/land.gpkg', sourceLayer: 'land', encoding: null, assignedCrs: null }); });
+    await act(async () => { await result.current.updateLayer('layer-1', { visible: false }); });
+    await act(async () => { await result.current.refreshWorkspace(); });
+    expect(request.mock.calls).toHaveLength(count);
+    expect(result.current.needsReopen).toBe(true);
   });
 });
 
