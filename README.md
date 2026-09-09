@@ -128,6 +128,7 @@ docs/                    方案、数据规范、架构与验收记录
 ## 文档
 
 - [优化方案](docs/plan-v2.md)
+- [后续制图与成果输出路线图](docs/cartography-roadmap.md)
 - [GIS 数据可靠性规范](docs/gis-data-standard.md)
 - [当前架构](docs/architecture.md)
 - [项目数据模型](docs/data-model.md)

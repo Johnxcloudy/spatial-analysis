@@ -4,7 +4,7 @@ Windows-first personal GIS workstation for land-use overlay and area statistics.
 
 ## Current Scope
 
-The user approved docs/plan-v2.md and has now authorized Phase 1A development and Git deployment. Deliver ordinary GPKG/SHP/GeoJSON/GDB vectors, managed snapshots, map/layers/attributes/export, cancellable import jobs and schema migration. Use synthetic acceptance data as requested. Phase 1B coordinate tables, 1C rasters, 1D consolidation and Phase 2 land overlay remain subsequent milestones. See docs/phase-1a.md and shared/contracts.ts for the current contracts.
+Phase 1A (0.2.0) is delivered with synthetic acceptance data; see docs/verification-phase-1a.md. The current request adds cartography and optional Agent design assistance to future tasks, documented in docs/cartography-roadmap.md. It authorizes roadmap updates, not implementation of those future features. Phase 1B coordinate tables, 1C rasters, 1D consolidation and Phase 2 land overlay remain the next product milestones. See docs/phase-1a.md and shared/contracts.ts for the implemented contracts.
 
 ## Engineering Rules
 
@@ -18,7 +18,14 @@ The user approved docs/plan-v2.md and has now authorized Phase 1A development an
 - Keep RPC versioned, parameter-validated and bounded. Protocol data goes to stdout; logs go to stderr/files.
 - Test project round trips, invalid/corrupt inputs, coordinate transformation and genuine GeoPackage IO. Report clean-machine verification as pending until actually run there.
 - Work in the existing feature branch; preserve remote history and user documents. Never force-push.
-- Update README, docs, and TODO for delivered behavior and limitations. Stop at the Phase 1A boundary.
+- Update README, docs, and TODO for delivered behavior and limitations. Keep planned capabilities distinct from implemented contracts; select the authorized milestone before changing application behavior.
+
+## Future Cartography Constraints
+
+- Styling, terrain visualization and layout must not mutate source datasets, analysis geometry, values, units or statistical policies. Derived display products retain their input versions and parameters.
+- Manual tools, templates and optional Agent suggestions use one versioned, validated Cartography Spec. Agent suggestions require preview/adoption and undo; they cannot supply arbitrary rendering code or bypass data/resource access controls.
+- Formal exports use complete data and explicit output budgets, not the bounded interactive viewport. Validate map-frame CRS, physical scale, legends, NoData, fonts and vector/raster output capabilities.
+- Publication/Nature themes are configurable presets with rule provenance, not claims of journal or planning compliance. Offline manual rendering remains available without an Agent.
 
 ## Ownership During Phase 1A
 
