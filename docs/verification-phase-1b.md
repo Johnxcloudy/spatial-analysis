@@ -1,7 +1,7 @@
 # Phase 1B 验证记录
 
 日期：2026-09-09。应用 0.3.0、RPC 协议 3、项目 schema 3。
-状态：本机开发与分发验收完成，Git 推送及远程 CI 核查进行中。
+状态：本机开发与分发验收完成，功能提交已推送，对应远程 Windows CI 通过。
 
 ## 范围与环境
 
@@ -97,9 +97,23 @@ NSIS 安装器：`apps/desktop/src-tauri/target/release/bundle/nsis/Spatial Anal
 随后静默卸载通过，程序文件与卸载注册项已移除。证据：
 `.artifacts/installer-phase1b.json`。项目和报告保存在安装目录之外。
 
-源码、依赖锁和验收脚本随本阶段提交；本记录在提交前写入，远程 CI 状态
-需在推送后按实际功能提交 SHA 查询，不能沿用 Phase 1A 的成功状态。
-本轮使用 `feat/phase-1a`，不强制推送；构建产物和合成项目不进入 Git。
+源码、依赖锁和验收脚本已提交并推送至 `feat/phase-1a`，功能提交为
+`a8879f8156e7d3392f5883d0b7f7e4cc80b26d8f`，通过 `git ls-remote` 核对远程 SHA。
+未强制推送；构建产物和合成项目不进入 Git。
+
+2026-09-09 已通过 GitHub API 核对上述功能提交的
+[Windows CI 34324666936](https://github.com/Johnxcloudy/spatial-analysis/actions/runs/34324666936)：
+`status=completed`、`conclusion=success`。Windows job `102379065170` 于
+07:47:58 UTC（北京时间 15:47:58）结束，前端/Python/Rust 检查、源码与冻结引擎
+工作流、安装器构建、原生 EXE 冒烟测试及产物上传全部通过。
+
+CI 产物 `spatial-analysis-windows-a8879f8156e7d3392f5883d0b7f7e4cc80b26d8f`
+（artifact ID `10093641628`）已上传，查询时未过期。此 CI 结论只对应上述功能提交；
+后续阶段收尾文档提交不改变已验证的应用代码或安装器，使用 `[skip ci]`
+跳过重复构建；其验证为文档复核与 `git diff --check`。
+
+收尾复核重新读取本机工作流/UI/安装报告，均为 `ok=true`，并重新计算本地安装器
+SHA-256，与本记录一致。此时只更新文档，未重复执行已通过的本机应用测试。
 
 ## 验证边界
 

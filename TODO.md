@@ -30,7 +30,7 @@
 
 本轮验收证据见 [Phase 1A 验证记录](docs/verification-phase-1a.md)。Git 交付使用 `feat/phase-1a`，远程提交和 CI 状态见该分支的 GitHub Actions。
 
-## Phase 1B（本机完成，Git/CI 收尾中）
+## Phase 1B（已交付，本机验收与功能提交 CI 通过）
 
 - [x] 用户授权继续开发，沿用合成样本与阶段总结流程。
 - [x] 固定独立表格/派生点方案、协议 3、schema 3 和 0.3.0 目标。
@@ -38,7 +38,12 @@
 - [x] 属性工作区、导入预览、错误行报告、源行号、导出。
 - [x] v1/v2 迁移、任务取消、发布恢复与源码回归。
 - [x] 源码/冻结引擎、原生 UI、0.3.0 安装包与本机安装/卸载验证。
-- [ ] 执行说明、Git 推送及对应 CI 核查。
+- [x] 执行说明、Git 推送及对应功能提交 CI 核查。
+
+功能提交 `a8879f8156e7d3392f5883d0b7f7e4cc80b26d8f` 已推送至 `feat/phase-1a`；
+[Windows CI 34324666936](https://github.com/Johnxcloudy/spatial-analysis/actions/runs/34324666936)
+为 success，安装器与报告已上传。详细结果与未覆盖环境见
+[Phase 1B 验证记录](docs/verification-phase-1b.md)。
 
 ## 后续阶段
 

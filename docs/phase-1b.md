@@ -1,6 +1,7 @@
 # Phase 1B: Coordinate Tables
 
-Status: implemented and locally verified. Application 0.3.0, protocol 3,
+Status: delivered; local verification and functional-commit Windows CI passed.
+Application 0.3.0, protocol 3,
 project schema 3. Acceptance uses synthetic CSV/XLSX fixtures; distribution
 and Git/CI evidence are recorded in verification-phase-1b.md.
 
@@ -24,6 +25,7 @@ and Git/CI evidence are recorded in verification-phase-1b.md.
 - Initial limits: 100,000 data rows, 256 total fields, 2,000,000 source cells,
   128 MiB normalized values. Bound source/expanded ZIP size, member count and
   preview payload separately. Preview is partial, not full validation.
+  Import allows at most 254 source columns; point derivation allows at most 252.
 - CSV encodings: UTF-8/UTF-8 with BOM, GBK and GB18030. Delimiters: comma,
   semicolon, tab or pipe. Header row: 1-1000. Preview: at most 20 rows/1 MiB;
   source: 128 MiB; XLSX expanded members: 256 MiB/10,000 entries/512 sheets.
