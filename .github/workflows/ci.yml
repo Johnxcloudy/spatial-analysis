@@ -1,0 +1,105 @@
+name: Windows CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+          enable-cache: true
+          cache-dependency-glob: gis-engine/uv.lock
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install engine dependencies
+        run: uv sync --project gis-engine --frozen --group dev
+
+      - name: Check frontend
+        run: npm run check
+
+      - name: Test frontend
+        run: npm test
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Test engine
+        run: uv run --project gis-engine --frozen --group dev python -m pytest gis-engine/tests
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all -- --check
+
+      - name: Package engine
+        run: ./scripts/build-engine.ps1 -SkipSync
+
+      - name: Test native host
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --lib
+
+      - name: Smoke test frozen engine with isolated environment
+        run: |
+          $engine = (Resolve-Path 'apps/desktop/src-tauri/resources/engine/spatial-engine.exe').Path
+          ./scripts/smoke-engine.ps1 -Executable $engine -OutputDirectory '.artifacts/frozen-engine/ci'
+
+      - name: Build Windows installer
+        run: npm run tauri -- build
+
+      - name: Smoke test native executable
+        run: |
+          $executable = (Resolve-Path 'apps/desktop/src-tauri/target/release/spatial-analysis-desktop.exe').Path
+          $outputDirectory = Join-Path $env:RUNNER_TEMP ('spatial-analysis-native-' + [guid]::NewGuid().ToString('N'))
+          $process = Start-Process -FilePath $executable -ArgumentList @('--smoke-test', ('"' + $outputDirectory + '"')) -WindowStyle Hidden -PassThru
+          try {
+              if (-not $process.WaitForExit(180000)) {
+                  Stop-Process -Id $process.Id -ErrorAction SilentlyContinue
+                  throw 'Native smoke test exceeded the 180-second deadline.'
+              }
+              if ($process.ExitCode -ne 0) { throw "Native smoke test exited with code $($process.ExitCode)." }
+          } finally { $process.Dispose() }
+          $reportPath = Join-Path $outputDirectory 'native-smoke.json'
+          $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+          if ($report.ok -isnot [bool] -or -not $report.ok) { throw 'Native smoke report did not report ok=true.' }
+          if ($report.runtime.packaged -isnot [bool] -or -not $report.runtime.packaged) { throw 'Native smoke test did not use the packaged engine.' }
+          Write-Output "Native smoke passed: $reportPath"
+
+      - name: Upload installer and verification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spatial-analysis-windows-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 14
+          include-hidden-files: true
+          path: |
+            apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
+            .artifacts/frozen-engine/**/*.json
+            .artifacts/frozen-engine/**/*.log
+            ${{ runner.temp }}/spatial-analysis-native-*/**/*.json

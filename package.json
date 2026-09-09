@@ -1,0 +1,13 @@
+{
+  "name": "spatial-analysis",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "postinstall": "npm --prefix apps/desktop ci",
+    "dev": "npm --prefix apps/desktop run dev",
+    "build": "npm --prefix apps/desktop run build",
+    "tauri": "npm --prefix apps/desktop run tauri --",
+    "check": "npm --prefix apps/desktop run check",
+    "test": "npm --prefix apps/desktop run test"
+  }
+}
