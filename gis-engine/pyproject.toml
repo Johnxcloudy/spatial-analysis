@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "spatial-analysis-engine"
+version = "0.7.0"
+description = "Local GIS engine for Spatial Analysis Desktop"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "affine==2.4.0",
+  "defusedxml==0.7.1",
+  "geopandas==1.1.1",
+  "numpy==2.4.2",
+  "openpyxl==3.1.5",
+  "portalocker==3.2.0",
+  "psutil==7.0.0",
+  "pyarrow==21.0.0",
+  "pyogrio==0.11.1",
+  "pyproj==3.7.2",
+  "rasterio==1.4.3",
+  "shapely==2.1.1",
+]
+
+[project.scripts]
+spatial-engine = "spatial_engine.__main__:main"
+
+[dependency-groups]
+dev = [
+  "pyinstaller==6.16.0",
+  "pytest==8.4.2",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/spatial_engine"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+filterwarnings = ["error"]

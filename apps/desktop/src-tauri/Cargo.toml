@@ -1,0 +1,24 @@
+[package]
+name = "spatial-analysis-desktop"
+version = "0.7.0"
+description = "Local spatial analysis desktop foundation"
+authors = ["Spatial Analysis contributors"]
+edition = "2021"
+rust-version = "1.98"
+
+[lib]
+name = "spatial_analysis_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+tokio = { version = "1", features = ["process", "io-util", "time", "sync", "rt-multi-thread"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security"] }

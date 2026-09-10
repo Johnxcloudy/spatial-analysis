@@ -1,0 +1,14 @@
+# Isolated CART-00 experiment, never installed in the production engine environment.
+affine==2.4.0
+matplotlib==3.10.6
+numpy==2.4.2
+pyarrow==21.0.0
+pyogrio==0.11.1
+pyproj==3.7.2
+rasterio==1.4.3
+shapely==2.1.1
+pypdf==6.0.0
+pypdfium2==4.30.0
+fonttools==4.60.0
+Pillow==11.3.0
+pyinstaller==6.16.0
