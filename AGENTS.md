@@ -4,6 +4,15 @@ Windows-first personal GIS workstation for land-use overlay and area statistics.
 
 ## Current Scope
 
+User authorized the next step on 2026-09-10. Phase3B / target0.6.2 is now in progress:
+query deadline/startup lifecycle fixes, opt-in native request timings and bounded CI
+failure evidence. Read docs/phase-3b.md and docs/superpowers/plans/2026-09-10-phase-3b.md.
+Root owns Rust timing/version/docs/integration; analysis owns query_runner.py and
+test_query_runner_lifecycle.py; UI owns verify-pagination-ui.mjs; performance owns
+CI workflow/pytest-summary script/tests. Shared contracts remain root-owned and unchanged.
+
+### Phase3A local delivery and unresolved history
+
 Phase 3A / 0.6.1 implementation and local source/frozen/native/install acceptance are complete; remote acceptance remains incomplete because PR CI failed at Test engine. Protocol/schema 6, worker 5 and readiness 1 are unchanged. Read docs/phase-3a.md, docs/verification-phase-3a.md and the current 执行说明.md handoff. Functional commit 4db4999c5075123e5e99b2853130864d7b0621ab is pushed. Track push 34441137906 and PR 34441140400 separately; do not infer the failed test or claim all CI passed. Public browser requires sign-in for step logs. Preserve this unresolved gate before selecting a new milestone.
 
 Delivered locally: verified default pagination, explicit retry, and real-data import/export/project preservation. The supplied test/ and all derived diagnostic artifacts stay out of Git; originals are read-only. The sample has 127 polygons, one invalid geometry, and lacks classified analysis inputs. Do not infer classification, repair policy or business results. Current 100k/250k/500k frozen pagination uses existing synthetic fixtures; per-page proof still scans all rows and measurements do not represent OS cold cache. Phase 3A does not complete all Phase 3 external acceptance. Production ownership has returned to root; reassign explicitly before further edits.
