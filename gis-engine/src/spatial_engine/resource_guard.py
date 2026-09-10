@@ -77,6 +77,9 @@ class ResourceGuard:
         self._interval = interval
         self._started = time.monotonic()
         self._stopped = threading.Event()
+        # Retirement serializes with enforcement dispatch, never with sampling,
+        # process-tree discovery, joins or process waits.
+        self._enforcement_lock = threading.Lock()
         self._job = ProcessTreeJob(process.pid) if prefix == "task" else None
         try:
             self._root = psutil.Process(process.pid)
@@ -100,40 +103,65 @@ class ResourceGuard:
     def _monitor(self):
         while not self._stopped.wait(self._interval):
             if self.process.poll() is not None:
-                self.terminate()
+                self._enforce()
                 return
             try:
                 samples = [item.memory_info() for item in self._tree()]
                 # Windows private committed bytes also account for paged-out allocations.
                 memory = sum(getattr(sample, "private", sample.rss) for sample in samples)
                 self.peak_memory_bytes = max(self.peak_memory_bytes, memory)
+                reason = None
                 if memory > self._memory:
-                    self.reason = f"{self._prefix}_memory_limit"
+                    reason = f"{self._prefix}_memory_limit"
                 elif time.monotonic() - self._started > self._timeout:
-                    self.reason = f"{self._prefix}_timeout"
-                if self.reason:
-                    self.terminate()
+                    reason = f"{self._prefix}_timeout"
+                if reason:
+                    self._enforce(reason)
                     return
             except psutil.NoSuchProcess:
                 continue
             except psutil.Error:
-                self.reason = f"{self._prefix}_monitor_failed"
-                self.terminate()
+                self._enforce(f"{self._prefix}_monitor_failed")
                 return
 
+    def _enforce(self, reason=None):
+        self._terminate(monitor=True, reason=reason)
+
     def terminate(self):
-        if self._job is not None:
-            self._job.close()
-        members = self._tree()
+        """Explicit shutdown remains available after monitor retirement."""
+        self._terminate(monitor=False)
+
+    def _terminate(self, *, monitor, reason=None):
+        with self._enforcement_lock:
+            if monitor and self._stopped.is_set():
+                return
+            if reason is not None:
+                self.reason = reason
+            if self._job is not None:
+                self._job.close()
+        try:
+            members = self._tree()
+        except psutil.Error:
+            # Discovery may itself be the monitor failure. Still attempt cleanup
+            # of identities already observed, including the original root.
+            with self._tree_lock:
+                known = dict(self._known)
+                if self._root is not None:
+                    known[self._root.pid] = self._root
+                members = list(known.values())
         for member in reversed(members):
-            try:
-                member.kill()
-            except psutil.NoSuchProcess:
-                pass
+            with self._enforcement_lock:
+                if monitor and self._stopped.is_set():
+                    return
+                try:
+                    member.kill()
+                except psutil.NoSuchProcess:
+                    pass
         psutil.wait_procs(members, timeout=1.0)
 
     def stop(self):
-        self._stopped.set()
+        with self._enforcement_lock:
+            self._stopped.set()
         if threading.current_thread() is not self._thread:
             self._thread.join(timeout=1.5)
         if self.process.poll() is not None:

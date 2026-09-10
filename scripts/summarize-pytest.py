@@ -65,6 +65,13 @@ def main():
     except (OSError, ET.ParseError, ValueError) as error:
         report['diagnostic'] = bounded(f'JUnit unavailable: {error}')
 
+    public_context = {
+        key: report['context'][key]
+        for key in ('checkout_head', 'GITHUB_EVENT_NAME', 'GITHUB_SHA')
+    }
+    public_context.update(outcome=report['outcome'], junit_status=report['status'], counts=report['counts'])
+    print('::notice title=Pytest result context::' + annotation(json.dumps(public_context, ensure_ascii=True)))
+
     lines = ['## Engine pytest diagnostics', '', '<pre>',
              html.escape(f'Original pytest step outcome: {args.outcome}'),
              html.escape(f'JUnit status: {report["status"]}'),

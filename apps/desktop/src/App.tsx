@@ -122,7 +122,7 @@ export default function App({ bridge = desktop }: { bridge?: DesktopBridge }) {
       </main>
     </div>
 
-    <footer className="statusbar"><span className="status-message" role="status" aria-live="polite">{state.busy ? <><LoaderCircle className="spin" size={13} />{state.busy}</> : <><span className={`status-dot ${state.runtime ? 'online' : ''}`} />{state.notice || (state.runtime ? '就绪' : state.native ? '等待引擎连接' : '本地引擎不可用')}</>}</span><span>分析 CRS · {state.draft?.analysisCrs || '未指定'}</span><span className="version-label">0.6.1</span></footer>
+    <footer className="statusbar"><span className="status-message" role="status" aria-live="polite">{state.busy ? <><LoaderCircle className="spin" size={13} />{state.busy}</> : <><span className={`status-dot ${state.runtime ? 'online' : ''}`} />{state.notice || (state.runtime ? '就绪' : state.native ? '等待引擎连接' : '本地引擎不可用')}</>}</span><span>分析 CRS · {state.draft?.analysisCrs || '未指定'}</span><span className="version-label">0.6.2</span></footer>
 
     {importing && <ImportVector bridge={bridge} state={state} onClose={() => setImporting(false)} />}
     {importingTable && <ImportTable key={state.sessionId} bridge={bridge} state={state} onClose={() => setImportingTable(false)} />}

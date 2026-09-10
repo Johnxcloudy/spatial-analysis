@@ -12,13 +12,15 @@ const arg = (name, fallback) => { const index = process.argv.indexOf(name); retu
 const realReportPath = arg('--real-report');
 const largeReportPath = arg('--large-report');
 const executable = arg('--executable');
+const expectedVersion = arg('--expected-version', '0.6.2');
+const diagnostics = process.argv.includes('--diagnostics');
 if (!realReportPath || !largeReportPath || !executable) throw new Error('--real-report, --large-report and --executable are required.');
 const real = JSON.parse(await readFile(realReportPath, 'utf8'));
 const largeReport = JSON.parse(await readFile(largeReportPath, 'utf8'));
 if (!real.ok || !largeReport.ok) throw new Error('Both source fixture reports must pass.');
 const large = largeReport.levels.find((item) => item.ok && item.features === 500000 && item.options?.operation === 'clip');
 if (!large || !real.projectPath || !real.datasetId) throw new Error('Expected successful 127-feature real and 500000-feature synthetic fixtures.');
-const output = path.join(root, '.artifacts', `phase3a-ui-${Date.now()}`);
+const output = path.join(root, '.artifacts', `${diagnostics ? 'phase3b-ui-investigation' : 'phase3a-ui'}-${Date.now()}`);
 await mkdir(output);
 const copies = {};
 for (const [name, projectPath] of [['real', real.projectPath], ['large', large.projectPath]]) {
@@ -27,9 +29,10 @@ for (const [name, projectPath] of [['real', real.projectPath], ['large', large.p
   copies[name] = path.join(destination, path.basename(projectPath));
 }
 const sha256 = async (file) => createHash('sha256').update(await readFile(file)).digest('hex');
-const report = { ok: false, startedAt: new Date().toISOString(), output, copies, fixtures: { real: path.resolve(realReportPath), large: path.resolve(largeReportPath) }, release: { path: path.resolve(executable), sha256: await sha256(executable) }, thresholds: { domAckP95Ms: 150, eventLoopMaxStallMs: 500 }, hardware: { cpu: os.cpus()[0]?.model, logicalCpus: os.cpus().length, totalMemoryBytes: os.totalmem(), freeMemoryAtStartBytes: os.freemem(), platform: os.platform(), release: os.release() }, checks: [], screenshots: [], pageErrors: [], rpcMeasurements: [], privacy: 'Local-only screenshots may contain real data; report omits row values and geometry. Real source is never opened for mutation.', rpcMeasurementScope: 'Harness RPC helper elapsed time, including native invokes and any query_unready readiness waits/retries; excludes application JS queue waiting. Individual retries are not separately timed. DOM/timer metrics come only from the uninjected real-IPC synthetic pagination phase.' };
+const report = { ok: false, startedAt: new Date().toISOString(), output, copies, fixtures: { real: path.resolve(realReportPath), large: path.resolve(largeReportPath) }, release: { path: path.resolve(executable), sha256: await sha256(executable) }, thresholds: { domAckP95Ms: 150, eventLoopMaxStallMs: 500 }, hardware: { cpu: os.cpus()[0]?.model, logicalCpus: os.cpus().length, totalMemoryBytes: os.totalmem(), freeMemoryAtStartBytes: os.freemem(), platform: os.platform(), release: os.release() }, checks: [], screenshots: [], pageErrors: [], rpcMeasurements: [], privacy: 'Local-only screenshots may contain real data; report omits row values and geometry. Real source is never opened for mutation.', rpcMeasurementScope: 'Harness RPC helper elapsed time, including native invokes and any query_unready readiness waits/retries; excludes application JS queue waiting. Every helper attempt and readiness wait is separately timed in the browser; fetch completion is response receipt, WebView fallback completion is unavailable. Diagnostics add observation overhead. DOM/timer metrics come only from the uninjected real-IPC synthetic pagination phase.' };
 let browser;
 let page;
+let rpcSequence = 0;
 const button = (name) => page.getByRole('button', { name, exact: true });
 const tab = (name) => page.getByRole('tab', { name, exact: true });
 const pagination = () => page.locator('#map-panel .pagination');
@@ -38,28 +41,84 @@ const p95 = (values) => [...values].sort((a, b) => a - b)[Math.ceil(values.lengt
 
 async function rpc(method, params = {}) {
   const start = performance.now();
+  const rpcId = `helper-${++rpcSequence}`;
   let failure = null;
+  let trace = null;
   try {
-    return await page.evaluate(async ({ method, params }) => {
+    const envelope = await page.evaluate(async ({ method, params, rpcId, diagnostics }) => {
       const deadline = Date.now() + 15000;
+      const trace = { rpcId, phase: window.__paginationTrace?.phase ?? 'unobserved', startEpochMs: performance.timeOrigin + performance.now(), attempts: [], readinessWaits: [] };
+      const normalizedError = (cause) => {
+        let normalized = cause;
+        if (typeof cause === 'string') { try { normalized = JSON.parse(cause); } catch {} }
+        return { kind: normalized?.data?.kind ?? null, code: typeof normalized?.code === 'number' ? normalized.code : null };
+      };
       for (;;) {
-        try { return await window.__TAURI_INTERNALS__.invoke('engine_request', { method, params }); }
+        const attempt = { attemptId: `${rpcId}-${trace.attempts.length + 1}`, observerActive: diagnostics && window.__paginationObserverActive === true, startEpochMs: performance.timeOrigin + performance.now(), errorKind: null, errorCode: null };
+        const began = performance.now();
+        trace.attempts.push(attempt);
+        let result;
+        let failed = false;
+        try { result = await window.__TAURI_INTERNALS__.invoke('engine_request', { method, params }, diagnostics ? { headers: { 'x-spatial-probe-attempt': attempt.attemptId } } : undefined); }
         catch (cause) {
-          let normalized = cause;
-          if (typeof cause === 'string') { try { normalized = JSON.parse(cause); } catch {} }
-          if (normalized?.data?.kind !== 'query_unready' || Date.now() >= deadline) throw cause;
-          await new Promise((resolve) => setTimeout(resolve, 250));
+          failed = true;
+          const normalized = normalizedError(cause);
+          attempt.errorKind = normalized.kind;
+          attempt.errorCode = normalized.code;
         }
+        attempt.endEpochMs = performance.timeOrigin + performance.now();
+        attempt.durationMs = performance.now() - began;
+        attempt.ok = !failed;
+        if (!failed) { trace.endEpochMs = performance.timeOrigin + performance.now(); return { ok: true, result, trace }; }
+        if (attempt.errorKind !== 'query_unready' || Date.now() >= deadline) { trace.endEpochMs = performance.timeOrigin + performance.now(); return { ok: false, errorKind: attempt.errorKind, errorCode: attempt.errorCode, trace }; }
+        const wait = { afterAttemptId: attempt.attemptId, requestedMs: 250, startEpochMs: performance.timeOrigin + performance.now() };
+        const waiting = performance.now();
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        wait.endEpochMs = performance.timeOrigin + performance.now();
+        wait.durationMs = performance.now() - waiting;
+        trace.readinessWaits.push(wait);
       }
-    }, { method, params });
+    }, { method, params, rpcId, diagnostics });
+    trace = envelope.trace;
+    if (!envelope.ok) throw new Error(`Native helper failed: ${envelope.errorKind ?? 'unknown'} (${envelope.errorCode ?? 'unknown'})`);
+    return envelope.result;
   } catch (cause) { failure = String(cause); throw cause; }
-  finally { report.rpcMeasurements.push({ method, durationMs: performance.now() - start, error: failure, offset: params.offset, limit: params.limit }); }
+  finally {
+    const durationMs = performance.now() - start;
+    const nativeAttemptsMs = trace?.attempts.reduce((sum, item) => sum + item.durationMs, 0) ?? null;
+    const readinessWaitMs = trace?.readinessWaits.reduce((sum, item) => sum + item.durationMs, 0) ?? null;
+    report.rpcMeasurements.push({ rpcId, method, durationMs, error: failure, offset: params.offset, limit: params.limit, nativeAttemptsMs, readinessWaitMs, otherHelperMs: trace ? durationMs - nativeAttemptsMs - readinessWaitMs : null, trace });
+  }
 }
 
 async function adapter(projectPath) {
-  await page.evaluate((projectPath) => {
+  await page.evaluate(({ projectPath, diagnostics }) => {
     window.__paginationPickerPath = projectPath;
     if (window.__paginationRestore) return;
+    const trace = { events: [], actions: [], droppedEvents: 0, phase: 'initialization', sequence: 0, aliases: new Map(), maxRecords: 10000 };
+    window.__paginationTrace = trace;
+    window.__paginationObserverActive = diagnostics;
+    const action = (event) => {
+      if (!diagnostics || !event.isTrusted) return;
+      const target = event.target.closest('button,[role="tab"],select');
+      if (!target) return;
+      if (trace.actions.length >= trace.maxRecords) { trace.droppedEvents++; return; }
+      const label = target.getAttribute('aria-label');
+      trace.actions.push({ actionId: trace.actions.length + 1, phase: trace.phase, epochMs: performance.timeOrigin + performance.now(), type: event.type, role: target.getAttribute('role'), label, isLayerSelection: target.classList.contains('layer-select'), pageSize: label === '每页记录数' ? Number(target.value) : null });
+    };
+    document.addEventListener('click', action, true);
+    document.addEventListener('change', action, true);
+    const alias = (value) => { if (value == null) return null; if (!trace.aliases.has(value)) trace.aliases.set(value, `resource-${trace.aliases.size + 1}`); return trace.aliases.get(value); };
+    const observe = (cmd, payload, headers, transport) => {
+      if (!diagnostics || cmd !== 'engine_request') return null;
+      if (trace.events.length >= trace.maxRecords) { trace.droppedEvents++; return null; }
+      let marker = null;
+      try { marker = new Headers(headers).get('x-spatial-probe-attempt'); } catch {}
+      const params = payload?.params ?? {};
+      const record = { sequence: ++trace.sequence, transport, helperAttemptId: marker, origin: marker ? 'harness-marker' : 'unattributed', method: String(payload?.method ?? '').slice(0, 80), projectAlias: alias(params.path), datasetAlias: alias(params.datasetId), offset: params.offset, limit: params.limit, filtered: !!params.filter, sorted: !!params.sortField, phase: trace.phase, startEpochMs: performance.timeOrigin + performance.now(), completionAvailable: false };
+      trace.events.push(record);
+      return record;
+    };
     const injectedError = { code: -32000, message: 'Synthetic acceptance query timeout', data: { kind: 'query_timeout' } };
     const intercept = (cmd, payload) => {
       if (cmd === 'plugin:dialog|open' && payload?.options?.title === '打开项目') return { value: window.__paginationPickerPath, error: false };
@@ -72,27 +131,58 @@ async function adapter(projectPath) {
     };
     const fetch = window.fetch;
     window.fetch = function(input, options) {
+      let observed = null;
       try {
         const url = new URL(typeof input === 'string' ? input : input.url);
         if (url.hostname === 'ipc.localhost') {
-          const result = intercept(decodeURIComponent(url.pathname.slice(1)), JSON.parse(options?.body));
+          const cmd = decodeURIComponent(url.pathname.slice(1));
+          const payload = JSON.parse(options?.body);
+          observed = observe(cmd, payload, options?.headers, 'fetch');
+          const result = intercept(cmd, payload);
+          if (observed && result) observed.injected = true;
           if (result) return Promise.resolve(new Response(JSON.stringify(result.value), { headers: { 'Content-Type': 'application/json', 'Tauri-Response': result.error ? 'error' : 'ok' } }));
         }
       } catch {}
-      return fetch.call(this, input, options);
+      return fetch.call(this, input, options).then((response) => {
+        if (observed) {
+          observed.endEpochMs = performance.timeOrigin + performance.now();
+          observed.durationMs = observed.endEpochMs - observed.startEpochMs;
+          observed.completionAvailable = true;
+          observed.responseHeader = response.headers.get('Tauri-Response');
+          if (observed.responseHeader === 'error') response.clone().json().then((cause) => { if (typeof cause === 'string') { try { cause = JSON.parse(cause); } catch {} } observed.errorKind = cause?.data?.kind ?? null; }).catch(() => { observed.errorKind = 'unreadable_transport_error'; });
+        }
+        return response;
+      }, (cause) => { if (observed) { observed.endEpochMs = performance.timeOrigin + performance.now(); observed.durationMs = observed.endEpochMs - observed.startEpochMs; observed.completionAvailable = true; observed.errorKind = 'transport_rejection'; } throw cause; });
     };
     const webview = window.chrome?.webview;
     const post = webview?.postMessage;
     if (webview && post) webview.postMessage = function(message) {
       try {
         const data = typeof message === 'string' ? JSON.parse(message) : message;
+        const observed = observe(data.cmd, data.payload, data.options?.headers, 'webview');
         const result = intercept(data.cmd, data.payload);
+        if (observed && result) observed.injected = true;
         if (result) { queueMicrotask(() => window.__TAURI_INTERNALS__.runCallback(result.error ? data.error : data.callback, result.value)); return; }
       } catch {}
       return post.call(this, message);
     };
-    window.__paginationRestore = () => { window.fetch = fetch; if (webview && post) webview.postMessage = post; delete window.__paginationInjection; delete window.__paginationRestore; };
-  }, projectPath);
+    window.__paginationRestore = () => { window.fetch = fetch; if (webview && post) webview.postMessage = post; document.removeEventListener('click', action, true); document.removeEventListener('change', action, true); window.__paginationObserverActive = false; delete window.__paginationInjection; delete window.__paginationRestore; };
+  }, { projectPath, diagnostics });
+}
+async function phase(name) {
+  await page.evaluate((name) => { if (window.__paginationTrace) window.__paginationTrace.phase = name; }, name);
+}
+function classifyObservedAttempts(measurements, observation) {
+  const attempts = measurements.flatMap((item) => item.trace?.attempts ?? []);
+  const eligible = attempts.filter((item) => item.observerActive === true);
+  observation.notObservedBeforeAdapter = attempts.filter((item) => item.observerActive !== true).map((item) => ({ attemptId: item.attemptId, startEpochMs: item.startEpochMs, endEpochMs: item.endEpochMs, durationMs: item.durationMs, reason: 'observer was not active at attempt start; retained but not attributable' }));
+  observation.markerCoverageDenominator = eligible.length;
+  const observed = new Set(observation.events.map((item) => item.helperAttemptId).filter(Boolean));
+  const missing = eligible.filter((item) => !observed.has(item.attemptId)).map((item) => item.attemptId);
+  observation.markerAttributionVerified = eligible.length > 0 && missing.length === 0 && observation.droppedEvents === 0;
+  observation.missingHelperAttemptMarkers = missing;
+  if (observation.markerAttributionVerified) observation.events.forEach((item) => { if (item.origin === 'unattributed') item.origin = 'application'; });
+  observation.correlationBoundary = 'Header attribution covers only attempts started with the observer active; earlier attempts remain unobserved. Action/host-log time overlap is temporal association, not proven causality or one-to-one host request mapping. WebView fallback records dispatch only. No application JS queue entry times are observed.';
 }
 
 async function open(projectPath) {
@@ -168,12 +258,14 @@ try {
   await page.setViewportSize({ width: 1440, height: 900 });
   await expect(page.locator('.dirty-dot')).toHaveCount(0);
   await expect(button('取消当前任务')).toHaveCount(0);
+  await adapter(null);
   report.runtime = await rpc('runtime.info');
   expect(report.runtime.packaged).toBe(true);
-  expect(report.runtime.engineVersion).toBe('0.6.1');
+  expect(report.runtime.engineVersion).toBe(expectedVersion);
   expect(report.runtime.protocolVersion).toBe(6);
-  await expect(page.locator('.version-label')).toHaveText('0.6.1');
+  await expect(page.locator('.version-label')).toHaveText(expectedVersion);
 
+  await phase('real127');
   const realWorkspace = await open(copies.real);
   const realDataset = realWorkspace.datasets.find((item) => item.id === real.datasetId);
   expect(realDataset.featureCount).toBe(127);
@@ -204,6 +296,7 @@ try {
   report.checks.push({ name: 'real127-first50-last27-quality1-invalid-reopen', ok: true });
   await close();
 
+  await phase('synthetic500000-uninjected');
   const largeWorkspace = await open(copies.large);
   await selectDataset(largeWorkspace, large.inputDatasetId);
   await exactPage(copies.large, large.inputDatasetId, 0, 200, 500000);
@@ -232,6 +325,7 @@ try {
   report.checks.push({ name: 'uninjected500000-pagination-hidden-switch-and-interaction', ok: true, iterations: 16 });
 
   if (process.argv.includes('--inject-timeout')) {
+    await phase('explicitly-injected-timeout');
     await page.evaluate((datasetId) => { window.__paginationInjection = { datasetId, remaining: 1, calls: [] }; }, large.inputDatasetId);
     await page.getByLabel('每页记录数', { exact: true }).selectOption('50');
     await expect(button('重试当前页')).toBeVisible();
@@ -266,6 +360,14 @@ try {
   if (page) { try { await screenshot('failure'); } catch {} }
   process.exitCode = 1;
 } finally {
+  if (page && diagnostics) {
+    try {
+      report.diagnostics = await page.evaluate(() => { const trace = window.__paginationTrace; return trace ? { events: trace.events, actions: trace.actions, droppedEvents: trace.droppedEvents, endEpochMs: performance.timeOrigin + performance.now() } : null; });
+      if (report.diagnostics) {
+        classifyObservedAttempts(report.rpcMeasurements, report.diagnostics);
+      }
+    } catch (cause) { report.diagnosticsError = String(cause); }
+  }
   if (page) { try { await page.evaluate(() => { const probe = window.__paginationProbe; if (probe) { clearInterval(probe.timer); document.removeEventListener('click', probe.click, true); } window.__paginationRestore?.(); }); } catch {} }
   report.finishedAt = new Date().toISOString();
   await writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2));

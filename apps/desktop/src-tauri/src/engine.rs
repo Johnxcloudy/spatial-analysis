@@ -3,6 +3,7 @@ use crate::{
     protocol::{
         decode_response, validate_request, EngineError, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES,
     },
+    rpc_timing::RpcTiming,
 };
 use serde_json::{json, Value};
 use std::{
@@ -210,9 +211,27 @@ impl EngineManager {
         method: &str,
         params: Value,
     ) -> Result<Value, EngineError> {
-        let deadline = Instant::now() + Duration::from_secs(90);
+        let enabled = std::env::var("SPATIAL_TRACE_RPC").as_deref() == Ok("1");
+        let mut timing = RpcTiming::new(enabled);
+        let result = self.request_timed(app, method, params, &mut timing).await;
+        // The session guard has already been released; file logging must not hold it.
+        if let Some(record) = timing.record(method, &result) {
+            log_message(app, &format!("RPC timing: {record}"));
+        }
+        result
+    }
+
+    async fn request_timed(
+        &self,
+        app: &AppHandle,
+        method: &str,
+        params: Value,
+        timing: &mut RpcTiming,
+    ) -> Result<Value, EngineError> {
+        let deadline = timing.started + Duration::from_secs(90);
         validate_request(method, &params)?;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
+        timing.request_id = Some(id);
         let mut message =
             serde_json::to_vec(&json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))
                 .map_err(|e| EngineError::local("REQUEST_ENCODING", e.to_string()))?;
@@ -223,17 +242,26 @@ impl EngineManager {
             ));
         }
         message.push(b'\n');
-        let mut slot = self.lock_before(deadline).await?;
+        let queued = Instant::now();
+        let acquired = self.lock_before(deadline).await;
+        timing.queue_ms = Some(queued.elapsed().as_secs_f64() * 1000.0);
+        let mut slot = acquired?;
         if slot.is_none() {
-            *slot = Some(Session::start(app)?);
+            let starting = Instant::now();
+            let started = Session::start(app);
+            timing.startup_ms = Some(starting.elapsed().as_secs_f64() * 1000.0);
+            *slot = Some(started?);
         }
         let session = slot.as_mut().expect("session initialized");
+        let exchanging = Instant::now();
         let response = tokio::time::timeout_at(deadline, async {
             session.stdin.write_all(&message).await?;
             session.stdin.flush().await?;
             read_frame(&mut session.stdout, MAX_RESPONSE_BYTES).await
         })
         .await;
+        timing.exchange_ms = Some(exchanging.elapsed().as_secs_f64() * 1000.0);
+        let finishing = Instant::now();
         let parsed = match response {
             Ok(Ok(bytes)) => serde_json::from_slice::<Value>(&bytes).map_err(|e| {
                 EngineError::local("ENGINE_PROTOCOL", format!("引擎响应格式错误：{e}"))
@@ -247,7 +275,7 @@ impl EngineManager {
                 "GIS 引擎超过 90 秒未响应，已停止该进程。请重试并重新打开项目。",
             )),
         };
-        match parsed {
+        let result = match parsed {
             Ok(payload) => {
                 let result = decode_response(payload, id);
                 if result
@@ -267,7 +295,9 @@ impl EngineManager {
                 *slot = None;
                 Err(error)
             }
-        }
+        };
+        timing.finish_ms = Some(finishing.elapsed().as_secs_f64() * 1000.0);
+        result
     }
 
     pub fn shutdown(&self) {

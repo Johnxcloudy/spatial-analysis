@@ -61,7 +61,7 @@ async fn engine_request(
 async fn smoke_test(app: &AppHandle, directory: &std::path::Path) -> Result<Value, EngineError> {
     let engine = app.state::<EngineManager>();
     let runtime = engine.request(app, "runtime.info", json!({})).await?;
-    if runtime["protocolVersion"] != 6 || runtime["engineVersion"] != "0.6.1" {
+    if runtime["protocolVersion"] != 6 || runtime["engineVersion"] != "0.6.2" {
         return Err(EngineError::local(
             "SMOKE_VERSION_MISMATCH",
             runtime.to_string(),

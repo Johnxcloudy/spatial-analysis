@@ -7,6 +7,7 @@ import queue
 import subprocess
 import sys
 import threading
+from time import monotonic
 
 from .capacity import QUERY_MEMORY_BYTES, QUERY_SECONDS
 from .errors import DomainError
@@ -39,12 +40,16 @@ class QueryRunner:
     def _start(self):
         self._ready.clear()
         self._frames = queue.Queue(maxsize=1)
-        self._process = subprocess.Popen(self._command(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0)
-        self._job = ProcessTreeJob(self._process.pid)
-        self._guard = ResourceGuard(self._process, timeout_seconds=self._warmup,
-                                    memory_bytes=self._memory, prefix="query")
-        threading.Thread(target=self._reader, args=(self._process, self._frames, self._guard), daemon=True).start()
+        try:
+            self._process = subprocess.Popen(self._command(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0)
+            self._job = ProcessTreeJob(self._process.pid)
+            self._guard = ResourceGuard(self._process, timeout_seconds=self._warmup,
+                                        memory_bytes=self._memory, prefix="query")
+            threading.Thread(target=self._reader, args=(self._process, self._frames, self._guard), daemon=True).start()
+        except Exception:
+            self._dispose_process()
+            raise
 
     def _reader(self, process, frames, warmup_guard):
         try:
@@ -81,7 +86,7 @@ class QueryRunner:
             if self._closed:
                 raise DomainError("Query runner is closed", kind="query_unready")
             if not self._ready.is_set():
-                if self._process.poll() is not None:
+                if self._process is None or self._process.poll() is not None:
                     self._dispose_process()
                     self._start()
                 raise DomainError("Query engine is warming up; retry shortly", kind="query_unready")
@@ -94,12 +99,18 @@ class QueryRunner:
                          allow_nan=False, separators=(",", ":")).encode("ascii") + b"\n"
         if len(raw) > MAX_REQUEST_BYTES:
             raise DomainError("Query request exceeds limit", kind="query_limit")
+        deadline = monotonic() + self._timeout
         guard = ResourceGuard(self._process, timeout_seconds=self._timeout, memory_bytes=self._memory, prefix="query")
         self._guard = guard
         try:
             self._process.stdin.write(raw)
             self._process.stdin.flush()
-            response = self._frames.get(timeout=self._timeout + 0.15)
+            response = self._frames.get(timeout=max(0, deadline - monotonic()) + 0.15)
+            # The monitor can be delayed by scheduling/native process sampling.
+            # A received frame must still meet the parent's operation deadline;
+            # the queue grace period only lets termination/error frames arrive.
+            if guard.reason is not None or monotonic() >= deadline:
+                raise queue.Empty
             if not isinstance(response, dict) or not isinstance(response.get("ok"), bool):
                 raise ValueError("Invalid query response")
             if response["ok"]:
@@ -116,16 +127,26 @@ class QueryRunner:
 
     def _dispose_process(self):
         self._ready.clear()
-        if self._job is not None:
-            self._job.close()
-            self._job = None
-        if self._guard is not None:
-            self._guard.stop()
-            self._guard.terminate()
-        if self._process is not None:
-            self._process.wait(timeout=2)
-            self._process.stdin.close()
-            self._process.stdout.close()
+        process, job, guard = self._process, self._job, self._guard
+        self._process = self._job = self._guard = None
+        try:
+            if job is not None:
+                job.close()
+        finally:
+            try:
+                if guard is not None:
+                    guard.stop()
+                    guard.terminate()
+            finally:
+                if process is not None:
+                    try:
+                        # Startup may fail before either a job or guard exists.
+                        if process.poll() is None:
+                            process.kill()
+                        process.wait(timeout=2)
+                    finally:
+                        process.stdin.close()
+                        process.stdout.close()
 
     def close(self):
         with self._lock:

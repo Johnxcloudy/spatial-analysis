@@ -157,7 +157,7 @@ def compare(reference, actual):
 def verify(rpc, source, layer_name, output, report):
     with step(output, report, 'runtime_source_enumeration_and_independent_scan') as event:
         runtime = rpc.call('runtime.info')
-        require(runtime['protocolVersion'] == 6 and runtime['engineVersion'] in {'0.6.0', '0.6.1'}, 'Unexpected runtime version')
+        require(runtime['protocolVersion'] == 6 and runtime['engineVersion'] in {'0.6.0', '0.6.1', '0.6.2'}, 'Unexpected runtime version')
         report['runtime'] = {'engineVersion': runtime['engineVersion'], 'protocolVersion': runtime['protocolVersion'],
                              'packaged': runtime['packaged'], 'versions': runtime['versions']}
         info = pyogrio.read_info(source, layer=layer_name)
