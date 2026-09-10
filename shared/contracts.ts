@@ -297,6 +297,43 @@ export interface MapLayer {
   categoryColors: Record<string, string>;
   order: number;
   rasterStyle?: RasterStyle;
+  /** Adopted vector display configuration; absent/null preserves the legacy style. */
+  cartography?: VectorCartographySpec | null;
+  /** Monotonic per-layer edit revision, retained after restoring the old style. */
+  cartographyRevision?: number;
+}
+
+export type LayerChanges = Partial<Pick<MapLayer,
+  "name" | "visible" | "opacity" | "color" | "categoryField" | "categoryColors" | "rasterStyle" | "cartography"
+>> & { expectedCartographyRevision?: number };
+
+/** CART-01A: one validated layer-style component, not a page/layout/export spec. */
+export interface VectorCartographySpec {
+  specVersion: 1;
+  kind: "vector-layer";
+  revision: number;
+  input: { datasetId: string; version: string };
+  /** Starting preset provenance; resolved values below may be manually overridden. */
+  basePreset: "planning" | "publication";
+  presetVersion: 1;
+  symbol: {
+    fillColor: string;
+    strokeColor: string;
+    strokeWidthPt: number;
+    pointRadiusPt: number;
+  };
+  renderer:
+    | { kind: "single" }
+    | {
+        kind: "categorized";
+        field: string;
+        categories: { value: Exclude<FieldValue, null>; label: string; color: string }[];
+        nullColor: string;
+        nullLabel: string;
+        otherColor: string;
+        otherLabel: string;
+      };
+  legend: { visible: boolean; title: string };
 }
 
 export interface Task {
