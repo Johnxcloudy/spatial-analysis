@@ -16,7 +16,7 @@ def test_runtime_info_matches_contract(tmp_path: Path, monkeypatch) -> None:
     result = Engine().dispatch("runtime.info", {})
 
     assert result["protocolVersion"] == 6
-    assert result["engineVersion"] == "0.6.0"
+    assert result["engineVersion"] == "0.6.1"
     assert result["pythonVersion"].startswith("3.12")
     assert isinstance(result["packaged"], bool)
     assert {"geopandas", "shapely", "pyogrio", "pyproj", "rasterio", "openpyxl"} <= result["versions"].keys()

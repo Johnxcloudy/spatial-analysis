@@ -78,7 +78,7 @@ def inspect_workspace(rpc: Rpc, project: dict, expected: dict) -> dict:
 
 def verify(rpc: Rpc, output: Path, checks: list[str]) -> dict:
     runtime = rpc.call("runtime.info")
-    assert runtime["protocolVersion"] == 6 and runtime["engineVersion"] == "0.6.0"
+    assert runtime["protocolVersion"] == 6 and runtime["engineVersion"] == "0.6.1"
     project = rpc.call("project.create", {"directory": str(output / "original"), "name": "Mixed original"})
     path = project["projectPath"]
     sources = output / "sources"

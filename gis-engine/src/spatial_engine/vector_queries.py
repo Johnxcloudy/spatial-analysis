@@ -14,6 +14,7 @@ from pyproj import Transformer
 from .errors import DomainError, InvalidParamsError
 from .vectors import _decode_geometry, canonical_value
 from .capacity import MAX_FEATURES, MAX_GEOMETRY_VERTICES
+from .publication import ArtifactLease
 
 MAX_QUERY_BYTES = 2 * 1024 * 1024
 MAX_DISPLAY_VERTICES = 100_000
@@ -112,6 +113,30 @@ def _filter(dataset: dict, value) -> tuple[str, list]:
     raise InvalidParamsError("Unsupported filter operator")
 
 
+def _certify_page_key(connection, dataset: dict) -> tuple[str | None, int | None]:
+    """Prove ordinal == physical key under this query's transaction and deadline.
+
+    This deliberately scans on every default page: no cross-request proof cache and
+    no changes to immutable snapshots. Historical layouts can retain the old sort.
+    """
+    table = _quote(dataset["storageLayer"])
+    primary = [row for row in connection.execute(f"PRAGMA table_info({table})") if row["pk"]]
+    if len(primary) != 1 or primary[0]["type"].upper() != "INTEGER":
+        return None, None
+    key = _quote(primary[0]["name"])
+    identifier = _quote(dataset["internalIdField"])
+    count, minimum, maximum, mismatches = connection.execute(
+        f"SELECT COUNT(*), MIN({key}), MAX({key}), SUM(CASE WHEN "
+        f"typeof({identifier}) = 'text' AND typeof({key}) = 'integer' "
+        f"AND {identifier} COLLATE BINARY = CAST({key} AS TEXT) THEN 0 ELSE 1 END) FROM {table}"
+    ).fetchone()
+    contiguous = (count == 0 and minimum is None and maximum is None) or (
+        count > 0 and minimum == 1 and maximum == count and mismatches == 0)
+    if contiguous and count == dataset.get("featureCount"):
+        return key, count
+    return None, count
+
+
 def attribute_page(dataset: dict, managed_path: Path, params: dict) -> dict:
     offset = _integer(params.get("offset", 0), "offset", 0, MAX_FEATURES)
     limit = _integer(params.get("limit", 200), "limit", 1, 500)
@@ -133,13 +158,22 @@ def attribute_page(dataset: dict, managed_path: Path, params: dict) -> dict:
     columns = ", ".join(_quote(name) for name in dict.fromkeys(names))
     table = _quote(dataset["storageLayer"])
     try:
-        with closing(_connect(managed_path)) as connection:
-            total = connection.execute(f"SELECT COUNT(*) FROM {table}{where}", values).fetchone()[0]
-            records = connection.execute(f"SELECT {columns} FROM {table}{where} ORDER BY {order} LIMIT ? OFFSET ?", [*values, limit, offset]).fetchall()
-        return _bounded({"datasetId": dataset["id"], "version": dataset["version"], "fields": dataset["fields"],
-                         "rows": [_row(dataset, row) for row in records], "total": total, "offset": offset, "limit": limit,
-                         "hasMore": offset + len(records) < total, "truncated": False})
-    except sqlite3.Error as exc:
+        with closing(ArtifactLease(managed_path)) as lease:
+            with closing(_connect(managed_path)) as connection:
+                connection.execute("BEGIN")
+                key, total = _certify_page_key(connection, dataset) if not where and sort_field is None else (None, None)
+                if total is None:
+                    total = connection.execute(f"SELECT COUNT(*) FROM {table}{where}", values).fetchone()[0]
+                if key is not None:
+                    records = connection.execute(f"SELECT {columns} FROM {table} WHERE {key} > ? ORDER BY {key} LIMIT ?", (offset, limit)).fetchall()
+                else:
+                    records = connection.execute(f"SELECT {columns} FROM {table}{where} ORDER BY {order} LIMIT ? OFFSET ?", [*values, limit, offset]).fetchall()
+            result = _bounded({"datasetId": dataset["id"], "version": dataset["version"], "fields": dataset["fields"],
+                              "rows": [_row(dataset, row) for row in records], "total": total, "offset": offset, "limit": limit,
+                              "hasMore": offset + len(records) < total, "truncated": False})
+            lease.require_identity(managed_path)
+            return result
+    except (sqlite3.Error, OSError) as exc:
         if getattr(exc, "sqlite_errorcode", None) == sqlite3.SQLITE_INTERRUPT:
             raise DomainError("Attribute query exceeded its time budget", kind="query_timeout") from exc
         raise DomainError("Could not read snapshot attributes", kind="query_failed", detail=str(exc)) from exc

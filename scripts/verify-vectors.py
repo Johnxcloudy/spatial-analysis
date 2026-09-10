@@ -108,7 +108,7 @@ class Rpc:
 
 def verify(rpc: Rpc, output: Path, checks: list[str], export_directory: Path | None = None) -> dict:
     runtime = rpc.call("runtime.info")
-    assert runtime["protocolVersion"] == 6 and runtime["engineVersion"] == "0.6.0", runtime
+    assert runtime["protocolVersion"] == 6 and runtime["engineVersion"] == "0.6.1", runtime
     assert "pyarrow" in runtime["versions"], runtime
     project = rpc.call("project.create", {"directory": str(output / "\u7528\u5730\u9879\u76ee"), "name": "\u7528\u5730\u9a8c\u6536"})
     path = project["projectPath"]

@@ -377,7 +377,7 @@ def main():
     memory = MemorySampler(rpc, output)
     try:
         report["runtime"] = rpc.call("runtime.info")
-        assert report["runtime"]["protocolVersion"] == 6 and report["runtime"]["engineVersion"] == "0.6.0"
+        assert report["runtime"]["protocolVersion"] == 6 and report["runtime"]["engineVersion"] == "0.6.1"
         if args.executable:
             assert report["runtime"]["packaged"] is True
         for count in counts:

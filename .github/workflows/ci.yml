@@ -72,6 +72,9 @@ jobs:
       - name: Verify land analysis and bounded pressure cases
         run: uv run --project gis-engine --frozen python scripts/verify-analysis.py --output .artifacts/analysis-source-ci --counts 1000 10000
 
+      - name: Verify default paging and immutable snapshots
+        run: uv run --project gis-engine --frozen python scripts/verify-pagination.py --fixtures .artifacts/analysis-source-ci/report.json --counts 10000 --workers 1 --output .artifacts/pagination-source-ci
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all -- --check
 
@@ -90,6 +93,7 @@ jobs:
           uv run --project gis-engine --frozen python scripts/verify-rasters.py --executable $engine --output .artifacts/rasters-frozen-ci
           uv run --project gis-engine --frozen python scripts/verify-portability.py --executable $engine --output .artifacts/portability-frozen-ci
           uv run --project gis-engine --frozen python scripts/verify-analysis.py --executable $engine --output .artifacts/analysis-frozen-ci --counts 1000
+          uv run --project gis-engine --frozen python scripts/verify-pagination.py --executable $engine --fixtures .artifacts/analysis-frozen-ci/report.json --counts 1000 --workers 1 --output .artifacts/pagination-frozen-ci
 
       - name: Build Windows installer
         run: npm run tauri -- build
@@ -135,4 +139,5 @@ jobs:
             .artifacts/portability-*/**/*.log
             .artifacts/analysis-*/report.json
             .artifacts/analysis-*/rpc-timings.jsonl
+            .artifacts/pagination-*/report.json
             ${{ runner.temp }}/spatial-analysis-native-*/**/*.json

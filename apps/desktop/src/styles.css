@@ -457,6 +457,8 @@ input[type="color"] { width: 31px; height: 28px; padding: 2px; background: #fff;
 .analysis-table-scroll th, .analysis-table-scroll td { padding: 9px; border-bottom: 1px solid #e2e6de; text-align: right; white-space: nowrap; }
 .analysis-table-scroll th { position: sticky; top: 0; background: #f4f6f0; }
 .analysis-record { font-size: 12px; margin-top: 16px; }
+.page-query-failure { padding: 12px; color: #923626; font-size: 12px; overflow-wrap: anywhere; }
+.page-query-failure p { margin: 8px 0; }
 .analysis-record pre { max-height: 350px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 #analysis-panel { min-height: 0; flex: 1; overflow: hidden; }
 #analysis-panel[hidden] { display: none; }

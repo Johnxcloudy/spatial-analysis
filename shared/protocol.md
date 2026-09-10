@@ -15,7 +15,7 @@ Phase 1A methods are `source.inspect`, `workspace.get`, `vector.import`, `vector
 
 The Python entry point is `python -m spatial_engine` (stdio). `--request '<JSON request>'` runs one request and exits for CI/package smoke tests. The frozen console executable is named spatial-engine.exe and accepts the same switch. The private `--worker <request-file>` mode executes one GIS job in its staging directory, using atomic progress/result files; stdout remains unused by the worker. Project metadata is modified only by the parent service.
 
-Application version 0.6.0. Project schema version 6. The engine stores its rotating log under LOCALAPPDATA/SpatialAnalysis/logs/engine.log (with an appropriate non-Windows development fallback). No log tokens or secrets. Error response: {jsonrpc:"2.0",id,error:{code,message,data?:{kind,detail?}}}. Standard parse/invalid-request/method/params errors use -32700/-32600/-32601/-32602. Domain failures use -32000 with stable data.kind. A syntactically valid JSON value that is not an RPC object is an invalid request; a parser recursion failure is a parse error.
+Application version 0.6.1. Project schema version 6. The engine stores its rotating log under LOCALAPPDATA/SpatialAnalysis/logs/engine.log (with an appropriate non-Windows development fallback). No log tokens or secrets. Error response: {jsonrpc:"2.0",id,error:{code,message,data?:{kind,detail?}}}. Standard parse/invalid-request/method/params errors use -32700/-32600/-32601/-32602. Domain failures use -32000 with stable data.kind. A syntactically valid JSON value that is not an RPC object is an invalid request; a parser recursion failure is a parse error.
 
 ## Phase 1B Methods
 

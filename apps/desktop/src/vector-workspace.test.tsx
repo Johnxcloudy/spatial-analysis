@@ -44,7 +44,45 @@ function fixtureBridge(request: DesktopBridge['request']): DesktopBridge {
 }
 afterEach(cleanup);
 
+it('shows an initial timeout as failure and explicitly retries the same attribute query', async () => {
+  const timeout = { message: 'Attribute query exceeded its time budget', data: { kind: 'query_timeout' } };
+  const request = vi.fn().mockRejectedValueOnce(timeout).mockResolvedValueOnce(pageFor());
+  const bridge = fixtureBridge(request as DesktopBridge['request']);
+  const failure = vi.fn();
+  const state = { project, runtime: {}, native: true, workspace, selectedLayerId: 'layer-1', handleFailure: failure } as unknown as ReturnType<typeof useWorkspace>;
+  render(<VectorWorkspace bridge={bridge} state={state} fitRequest={null} onFit={vi.fn()} />);
+  expect(await screen.findByText(/属性读取失败/)).toBeTruthy();
+  expect(screen.queryByText('暂无属性记录')).toBeNull();
+  expect(screen.queryByText('0 / 0')).toBeNull();
+  expect(failure).not.toHaveBeenCalled();
+  expect(request).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('button', { name: '重试当前页' }));
+  expect(await screen.findByText('first')).toBeTruthy();
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(request.mock.calls[1].slice(0, 2)).toEqual(request.mock.calls[0].slice(0, 2));
+  expect(screen.queryByRole('button', { name: '重试当前页' })).toBeNull();
+});
+
 describe('vector query consistency', () => {
+  it.each([dataset, table])('retains the entire failed query for $kind retry and forwards engine failure', async (source) => {
+    const query = { offset: 200, limit: 50, sortField: 'name', descending: true, filter: { field: 'name', operator: 'contains' as const, value: 'same' } };
+    const timeout = { message: 'time budget', data: { kind: 'query_timeout' } };
+    const disconnected = { message: 'gone', data: { kind: 'ENGINE_DISCONNECTED' } };
+    const request = vi.fn().mockRejectedValueOnce(timeout).mockRejectedValueOnce(disconnected);
+    const failure = vi.fn();
+    const bridge = fixtureBridge(request as DesktopBridge['request']);
+    const { result, rerender } = renderHook(({ enabled }) => useAttributePage(bridge, project.projectPath, source, query, enabled, failure), { initialProps: { enabled: true } });
+    await waitFor(() => expect(result.current.error).toBe(timeout));
+    expect(failure).not.toHaveBeenCalled();
+    act(() => result.current.retry());
+    await waitFor(() => expect(failure).toHaveBeenCalledWith(disconnected));
+    expect(request.mock.calls[0].slice(0, 2)).toEqual([source.kind === 'table' ? 'table.page' : 'vector.page', { path: project.projectPath, datasetId: source.id, ...query }]);
+    expect(request.mock.calls[1].slice(0, 2)).toEqual(request.mock.calls[0].slice(0, 2));
+    const retry = result.current.retry;
+    rerender({ enabled: false });
+    act(() => retry());
+    expect(request).toHaveBeenCalledTimes(2);
+  });
   it('discards an older page after the query changes', async () => {
     const older = deferred<AttributePage>();
     const newer = deferred<AttributePage>();
@@ -148,6 +186,11 @@ describe('map and attribute selection', () => {
     rerender(<AttributeTable {...props} page={{ ...page, offset: 2 }} query={{ ...initialAttributeQuery, offset: 2 }} />);
     fireEvent.click(screen.getByRole('button', { name: '下一页' }));
     expect(setQuery).toHaveBeenLastCalledWith({ ...initialAttributeQuery, offset: 4 });
+    const retry = vi.fn();
+    rerender(<AttributeTable {...props} page={null} error={new Error('budget')} onRetry={retry} query={{ ...initialAttributeQuery, offset: 4 }} />);
+    fireEvent.click(screen.getByRole('button', { name: '重试当前页' }));
+    expect(retry).toHaveBeenCalledOnce();
+    expect(setQuery).toHaveBeenCalledTimes(2);
     rerender(<AttributeTable {...props} page={{ ...page, offset: 4 }} query={{ ...initialAttributeQuery, offset: 4 }} />);
     fireEvent.click(screen.getByRole('button', { name: '上一页' }));
     expect(setQuery).toHaveBeenLastCalledWith({ ...initialAttributeQuery, offset: 2 });

@@ -3,6 +3,7 @@ import type { AnalysisOptions, VectorDataset } from '../../../../shared/contract
 import type { DesktopBridge } from '../bridge';
 import type { WorkspaceState } from '../use-workspace';
 import { useQueuedQuery } from '../use-queued-query';
+import { forwardPageFailure, pageFailureText } from '../page-query-error';
 
 const textFields = (dataset?: VectorDataset) => dataset?.fields.filter((field) => /^(string|text)/i.test(field.storageType)) ?? [];
 const number = (value: number) => value.toLocaleString('zh-CN', { maximumFractionDigits: 6 });
@@ -16,7 +17,7 @@ export function AnalysisWorkspace({ bridge, state, visible, onShowMap }: { bridg
   const [options, setOptions] = useState<AnalysisOptions>({ operation: 'clip', name: '', inputDatasetId: '', overlayDatasetId: '', inputClassField: '', overlayClassField: null, classificationStandard: '', analysisCrs: state.project?.analysisCrs ?? '', crsReason: '' });
   const [resultId, setResultId] = useState('');
   const [offset, setOffset] = useState(0);
-  const [revision, setRevision] = useState(0);
+
   const latestAnalysis = state.workspace?.tasks.find((task) => task.kind === 'analysis' && task.status === 'completed' && task.datasetId);
   useEffect(() => { if (latestAnalysis?.datasetId) { setResultId(latestAnalysis.datasetId); setOffset(0); } }, [latestAnalysis?.id, latestAnalysis?.datasetId]);
   const input = polygons.find((dataset) => dataset.id === options.inputDatasetId);
@@ -27,11 +28,11 @@ export function AnalysisWorkspace({ bridge, state, visible, onShowMap }: { bridg
   const valid = !!input && !!overlay && !!options.name.trim() && !!options.classificationStandard.trim() && !!options.analysisCrs.trim() && !!options.crsReason.trim() && textFields(input).some((field) => field.name === options.inputClassField) && (options.operation === 'clip' || textFields(overlay).some((field) => field.name === options.overlayClassField));
   const change = (values: Partial<AnalysisOptions>) => setOptions((current) => ({ ...current, ...values }));
   useEffect(() => { setOffset(0); }, [result?.id]);
-  const { value: page, loading } = useQueuedQuery(JSON.stringify([state.project?.projectPath, result?.id, result?.version, offset, revision]), enabled && visible && !!result, async (signal) => {
+  const { value: page, loading, error: pageError, retry } = useQueuedQuery(JSON.stringify([state.project?.projectPath, result?.id, result?.version, offset]), enabled && visible && !!result, async (signal) => {
     const next = await bridge.request('analysis.result', { path: state.project!.projectPath, datasetId: result!.id, offset, limit: 100 }, signal);
     if (next.datasetId !== result!.id || next.version !== result!.version || next.record.resultDatasetId !== result!.id || next.offset !== offset) throw new Error('统计响应与当前成果不匹配。');
     return next;
-  }, state.handleFailure);
+  }, (cause) => forwardPageFailure(cause, state.handleFailure));
   const showResult = () => {
     const layer = state.workspace?.layers.find((item) => item.datasetId === result?.id);
     if (layer) state.setSelectedLayerId(layer.id);
@@ -60,8 +61,9 @@ export function AnalysisWorkspace({ bridge, state, visible, onShowMap }: { bridg
     </section>
     <section className="analysis-results" aria-label="分类面积成果">
       <div className="section-heading"><h2>已登记成果</h2><select aria-label="分析成果" value={result?.id ?? ''} onChange={(event) => { setResultId(event.target.value); setOffset(0); }}><option value="" disabled>暂无成果</option>{results.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
-      {result && <div className="analysis-actions"><button className="button" disabled={!enabled} onClick={showResult}>查看成果图斑</button><button className="button" disabled={!enabled || loading} onClick={() => setRevision((value) => value + 1)}>刷新统计</button><button className="button" disabled={blocked} onClick={() => void state.exportVector(result.id, result.name)}>导出成果 GeoPackage</button><button className="button" disabled={blocked} onClick={() => void state.exportAnalysisCsv(result.id, result.name)}>导出统计 CSV</button></div>}
+      {result && <div className="analysis-actions"><button className="button" disabled={!enabled} onClick={showResult}>查看成果图斑</button><button className="button" disabled={!enabled || loading} onClick={retry}>{pageError ? '重试当前统计页' : '刷新统计'}</button><button className="button" disabled={blocked} onClick={() => void state.exportVector(result.id, result.name)}>导出成果 GeoPackage</button><button className="button" disabled={blocked} onClick={() => void state.exportAnalysisCsv(result.id, result.name)}>导出统计 CSV</button></div>}
       {loading && <p role="status">正在读取分类统计</p>}
+      {pageError != null && <div className="page-query-failure" role="alert"><strong>统计读取失败</strong><p>{pageFailureText(pageError)}</p></div>}
       {page && <>
         <dl className="analysis-metrics"><div><dt>研究区面积 m²</dt><dd>{number(page.record.studyAreaM2)}</dd></div><div><dt>有效覆盖面积 m²</dt><dd>{number(page.record.coveredAreaM2)}</dd></div><div><dt>未覆盖面积 m²</dt><dd>{number(page.record.uncoveredAreaM2)}</dd></div><div><dt>成果图斑</dt><dd>{page.record.outputFeatureCount.toLocaleString()}</dd></div></dl>
         <p>{page.record.areaMethod === 'projected_planar' && page.record.overlapPolicy === 'reject_positive_area' && page.record.geometryPolicy === 'no_repair_no_snap_no_sliver_removal'

@@ -1,6 +1,7 @@
 import type { AttributeFilter, TableDataset, VectorDataset } from '../../../shared/contracts';
 import type { DesktopBridge } from './bridge';
 import { useQueuedQuery } from './use-queued-query';
+import { forwardPageFailure } from './page-query-error';
 
 export interface AttributeQuery {
   offset: number;
@@ -13,12 +14,12 @@ export interface AttributeQuery {
 export const initialAttributeQuery: AttributeQuery = { offset: 0, limit: 200, sortField: null, descending: false, filter: null };
 
 export function useAttributePage(bridge: DesktopBridge, path: string | undefined, dataset: VectorDataset | TableDataset | undefined, query: AttributeQuery, enabled: boolean, onFailure: (cause: unknown) => void) {
-  const { value: page, loading } = useQueuedQuery(JSON.stringify([path, dataset?.id, dataset?.version, dataset?.kind, query]), enabled && !!path && !!dataset, async (signal) => {
+  const { value: page, loading, error, retry } = useQueuedQuery(JSON.stringify([path, dataset?.id, dataset?.version, dataset?.kind, query]), enabled && !!path && !!dataset, async (signal) => {
     const result = await bridge.request(dataset!.kind === 'table' ? 'table.page' : 'vector.page', { path, datasetId: dataset!.id, ...query }, signal);
     if (result.datasetId !== dataset!.id || result.version !== dataset!.version) throw new Error('属性数据版本不匹配，请刷新工作区。');
     return result;
-  }, onFailure);
-  return { page, loading };
+  }, (cause) => forwardPageFailure(cause, onFailure));
+  return { page, loading, error, retry };
 }
 
 export function useSelectedFeature(bridge: DesktopBridge, path: string | undefined, dataset: VectorDataset | undefined, featureId: string | null, enabled: boolean, onFailure: (cause: unknown) => void) {
