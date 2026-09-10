@@ -124,13 +124,13 @@ Phase3B / 0.6.2已完成本机交付和当前功能CI；外部稳定版验收仍
 
 ## 后续阶段
 
-### Phase4A1 / CART-01A（已授权，开发中）
+### Phase4A1 / CART-01A（已交付内部试用版，本机与最终功能CI通过）
 
 - [x] 固定[范围](docs/phase-4a1.md)、[实施计划](docs/superpowers/plans/2026-09-10-phase-4a1.md)及版本化样式组件契约。
 - [x] 严格配置验证、schema1–6备份迁移、修订冲突、恢复旧样式、另存与数据保全。
-- [x] Planning/Publication预设、手动类型分类/NULL/其他、符号草稿及一致图例；改色不重取几何的代码及回归，原生实测在下一项。
-- [ ] 源码/冻结/原生/10–50万响应检查、本机分发安装及当前功能Git/CI。
-- [ ] 阶段记录/精简交接/TODO/路线图收尾；CART-01余项、Layout和导出继续单列。
+- [x] Planning/Publication预设、手动类型分类/NULL/其他、符号草稿及一致图例；改色不重取几何的代码、回归和原生像素检查。
+- [x] 源码/冻结/原生/10–50万响应检查、本机分发安装及最终2f445d0的push34454596269/PR34454602030，各33步成功。通过范围和真实查询恢复限制见[验收记录](docs/verification-phase-4a1.md)。
+- [x] 阶段记录/精简交接/TODO/路线图收尾；文档提交主题chore: close Phase4A1 delivery [skip ci]，实际Git状态保存在忽略目录closeout记录；CART-01余项、Layout和导出继续单列。
 - [ ] 优先补查询监控/清理的异常阶段诊断与受控回归：本轮2次viewport monitor_failed后恢复，最长分页4.37秒；不能根据已有错误名确定psutil唯一原因，也不能隐去这项发布限制。
 
 - Phase 1C：已完成，见 [实施计划](docs/superpowers/plans/2026-09-09-phase-1c.md) 与 [范围约束](docs/phase-1c.md)。
@@ -145,11 +145,11 @@ Phase3B / 0.6.2已完成本机交付和当前功能CI；外部稳定版验收仍
 ## 制图任务跟踪
 
 - [x] CART-00：Phase 1D 制图配置草案与渲染选型探针；结果见 [实测证据](docs/verification-cartography-probe.md)，尚未交付 Layout 或正式制图导出。
-- [ ] CART-01：Planning/Publication 主题、明确语义的分类/分级、NoData、基本标注。
+- [ ] CART-01：CART-01A手动主题/分类/NULL/其他/图例已交付；有界类别发现、数值分级和基本标注仍待。
 - [ ] CART-02：可保存的 Layout、真实比例尺/方向、完整数据 PNG/PDF 导出。
 - [ ] CART-03：可追溯 Hillshade/高程着色/等高线，栅格拉伸/分类与受控影像混合。
 - [ ] CART-04：本地影像及分批接入的 XYZ/WMTS/WMS，署名、离线与导出能力检查。
 - [ ] CART-05：高级标签/坐标网、出版参数、TIFF/SVG/PDF 能力与字体验收。
 - [ ] CART-06：Agent 配置建议、校验、预览、采纳、撤销及离线回退。
 
-详细依赖和验收标准见 [制图与成果输出路线图](docs/cartography-roadmap.md)。CART-00 实验已完成，CART-01 至 CART-06 仍为后续任务；主线继续完成数据基础交付、用地分析与稳定性。合成样本与本机安装测试不能替代真实数据和独立环境验收。
+详细依赖和验收标准见 [制图与成果输出路线图](docs/cartography-roadmap.md)。CART-00实验和CART-01A已完成，CART-01余项及CART-02至CART-06仍为后续任务；主线继续补稳定性和正式业务对照。合成样本与本机安装测试不能替代真实数据和独立环境验收。

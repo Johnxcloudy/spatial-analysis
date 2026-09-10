@@ -1,8 +1,10 @@
 # Spatial Analysis Desktop
 
-**当前开发版本：0.7.0 / Phase4A1，正在进行最终验收。** 新增矢量 Planning/Publication
+**当前版本：0.7.0 / Phase4A1，内部试用版本。** 新增矢量 Planning/Publication
 预设、手动类型分类、符号图例和项目保存。准确范围见 [Phase4A1](docs/phase-4a1.md)。
 这只是 CART-01 的一部分；类别发现、数值分级、字段标注、Layout 和正式地图导出仍待开发。
+本机源码/冻结/安装及10–50万专题交互已验收，最终push与PR两条Windows CI通过，见[验收记录](docs/verification-phase-4a1.md)。
+高频切换测试曾出现两次查询监控失败后恢复，最长分页4.37秒；已列为优先诊断事项，不能承诺所有请求零失败。
 
 历史版本0.6.2 / Phase3B本机验收及其功能CI通过。修复查询截止、
 启动回收及旧监控干扰后续查询的问题，增加默认关闭的宿主RPC计时和CI诊断。
@@ -110,7 +112,7 @@ CART-00 制图草案和独立渲染探针是历史实验，详见 [探针证据]
 
 ## 安装与开发
 
-Windows x64安装器使用NSIS，包含Python/GDAL引擎和WebView2离线安装组件；安装版无需另外安装Python。0.6.2本机临时安装、安装后分析运行和卸载已验收；产物校验和、发布版交互与CI状态见[当前验证记录](docs/verification-phase-3b.md)。安装包尚未签名，独立Windows10/11、离线/升级和真实正式业务分析仍待验收。
+Windows x64安装器使用NSIS，包含Python/GDAL引擎和WebView2离线安装组件；安装版无需另外安装Python。0.7.0本机临时安装、安装后分析运行和卸载已验收；产物校验和、发布版交互与CI状态见[当前验证记录](docs/verification-phase-4a1.md)。安装包尚未签名，独立Windows10/11、离线/升级和真实正式业务分析仍待验收。
 
 开发环境需要 Node.js 24、Rust 1.98 或以上、Visual Studio C++ Build Tools、Windows SDK、WebView2 和 uv。冻结引擎验证脚本需要 PowerShell 7。Python 3.12 及 GIS 依赖由 uv 安装到 `gis-engine/.venv`。
 
@@ -151,7 +153,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1
 
 安装器输出到 apps/desktop/src-tauri/target/release/bundle/nsis/。构建包含 PyInstaller 引擎和 WebView2 离线安装组件，首次构建会下载较多依赖。安装包尚未签名，不等于正式生产发布。
 
-实际测试、原生工作流、安装包和校验和见[Phase 3A验证记录](docs/verification-phase-3a.md)，未完成项以记录为准。历史[Phase 2](docs/verification-phase-2.md)、[Phase 1D](docs/verification-phase-1d.md)、[Phase 1C](docs/verification-phase-1c.md)、[Phase 1B](docs/verification-phase-1b.md)、[Phase 1A](docs/verification-phase-1a.md)与[Phase 0](docs/verification.md)记录保留，不代替当前版本验收。
+实际测试、原生工作流、安装包和校验和见[Phase4A1验证记录](docs/verification-phase-4a1.md)，未完成项以记录为准。历史[Phase3B](docs/verification-phase-3b.md)、[Phase3A](docs/verification-phase-3a.md)、[Phase 2](docs/verification-phase-2.md)、[Phase 1D](docs/verification-phase-1d.md)、[Phase 1C](docs/verification-phase-1c.md)、[Phase 1B](docs/verification-phase-1b.md)、[Phase 1A](docs/verification-phase-1a.md)与[Phase 0](docs/verification.md)记录保留，不代替当前版本验收。
 
 生成真实 GDAL 驱动写出的合成样本，并验证开发引擎的四类格式导入、查询、导出和项目恢复：
 

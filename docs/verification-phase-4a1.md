@@ -1,6 +1,6 @@
 # Phase4A1 / 0.7.0 验证记录
 
-日期：2026-09-10。范围见[阶段说明](phase-4a1.md)及[实施计划](superpowers/plans/2026-09-10-phase-4a1.md)。本页随验收更新；尚未完成的检查不视为通过。
+日期：2026-09-10。范围见[阶段说明](phase-4a1.md)及[实施计划](superpowers/plans/2026-09-10-phase-4a1.md)。本机交付及最终功能CI通过；这是带明确查询恢复限制的内部试用版本，外部待办未标为通过。
 
 ## 当前证据
 
@@ -42,7 +42,17 @@
 
 宿主日志按本次PID26256和追加偏移取证，保存338条计时于`.artifacts/phase4a1-ui-launch-26256-host.json`。底层psutil异常类型/发生阶段没有被现有日志保留，无法证明监控失败唯一原因。代码还存在清理异常可能覆盖原始预算错误类别的歧义；后续应先增加有界诊断和受控回归，再决定修复，保持资源保护。当前4.37秒的可观测分解不能反推历史3998ms原因。
 
-功能Git/CI仍待本轮核查。
+## Git与CI
+
+功能提交`ff7d6c8d04aa0ae1489a8b858f0a1f29a37f078b`及根package版本补全`2f445d0d2baace83a8b4579e32998873bf8c73b6`已推送`feat/phase-1a`。后者是最终代码核对HEAD；两份根package内容从本机测试起就是0.7.0，第二提交补齐首次暂存遗漏，不改变已验收应用代码。
+
+最终push [34454596269](https://github.com/Johnxcloudy/spatial-analysis/actions/runs/34454596269)和PR [34454602030](https://github.com/Johnxcloudy/spatial-analysis/actions/runs/34454602030)均success，各33个可见步骤全部成功，包括源码/冻结专题、Windows安装器、原生冒烟及产物上传。两份公开pytest notice均386 tests、0 failures、0 errors、0 skipped。
+
+Push实际checkout为`2f445d0d2baace83a8b4579e32998873bf8c73b6`；PR实际checkout为`652997991953ed1efd9eac742155eff4ebc22cd6`，公开提交页核对父提交为`64f417deed92f365522630c15effbc5fd540b5a8`和`2f445d0d2baace83a8b4579e32998873bf8c73b6`。不把移动中的merge ref或PR快照说成功能HEAD。证据在`.artifacts/ci-phase4a1-functional.json`、五份原始run/job/commit页面及其SHA清单；未读取需登录的完整步骤日志，也未下载CI产物。
+
+最终收尾仅修改README、AGENTS、TODO、阶段范围/计划/验收/路线图和执行说明，提交主题`chore: close Phase4A1 delivery [skip ci]`。本轮功能CI不冒充文档提交另跑CI；实际HEAD/remote/干净工作区另存`.artifacts/phase4a1-git-closeout.json`。
+
+本机最终收尾检查通过：97个本地链接、18行交接、11份报告、124代码/54引擎文件无漂移、45份原文件244423字节不变、安装器及卸载和两份准确CI证据；见`.artifacts/phase4a1-closeout-check.json`。进程复核无本轮GIS程序残留。
 
 ## 持续边界
 
