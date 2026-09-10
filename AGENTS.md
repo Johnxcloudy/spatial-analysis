@@ -4,12 +4,22 @@ Windows-first personal GIS workstation for land-use overlay and area statistics.
 
 ## Current Scope
 
-User authorized the next step on 2026-09-10. Phase3B / target0.6.2 is now in progress:
-query deadline/startup lifecycle fixes, opt-in native request timings and bounded CI
-failure evidence. Read docs/phase-3b.md and docs/superpowers/plans/2026-09-10-phase-3b.md.
-Root owns Rust timing/version/docs/integration; analysis owns query_runner.py and
-test_query_runner_lifecycle.py; UI owns verify-pagination-ui.mjs; performance owns
-CI workflow/pytest-summary script/tests. Shared contracts remain root-owned and unchanged.
+Phase3B / 0.6.2 implementation and local source/frozen/native/install acceptance are
+complete; both current functional Windows CI runs passed. Read docs/phase-3b.md,
+docs/verification-phase-3b.md and the current execution handoff before selecting work.
+Query parent deadline/startup cleanup and retired monitor enforcement are fixed;
+opt-in host timings and bounded CI diagnostics are delivered in the internal release.
+Protocol/schema6, worker5 and readiness1 are unchanged. Functional commit
+b3c7100fa81e8fa46c3e1a1ffd3211e47c3657d8 is pushed on feat/phase-1a. Push34445680269
+and PR34445683926 succeeded, 32 visible steps each. Public notices verify checkout
+b3c7100fa81e8fa46c3e1a1ffd3211e47c3657d8 for push and merge snapshot
+f8d8e1c046cb1420fa32bb1a6b504f815914e8f0 for PR, both326 pytest cases with zero failures.
+Documentation closeout is a separate [skip ci] commit; inspect actual HEAD/remote.
+Production ownership has returned to root; UI/native/install processes are cleaned up.
+Reassign explicit ownership before future work; shared/contracts.ts stays root-owned.
+Current 100k/250k/500k pagination reuses synthetic snapshots, not a new complete500k
+analysis or OS cold-cache test. Native timing correlates by time without shared IDs;
+the old3998ms event and original PR failure remain unexplained. Preserve those limits.
 
 ### Phase3A local delivery and unresolved history
 
