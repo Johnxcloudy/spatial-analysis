@@ -39,7 +39,7 @@ const tab = (name) => page.getByRole('tab', { name, exact: true });
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const p95 = (values) => values.length ? [...values].sort((a, b) => a - b)[Math.ceil(values.length * 0.95) - 1] : null;
 
-async function bridgeCall(method, params) {
+async function bridgeCall(method, params = {}) {
   return page.evaluate(async ({ method, params, packaged }) => {
     if (packaged) {
       const probe = window.__analysisProbe;
@@ -152,11 +152,11 @@ async function configure(item, name) {
   await page.getByLabel('分析投影', { exact: true }).fill(options.analysisCrs);
   await page.getByLabel('投影适用理由', { exact: true }).fill(options.crsReason);
 }
-async function latestTask(projectPath, kind, excluding = '') {
+async function latestTask(projectPath, kind, excluding = []) {
   let found;
   await expect.poll(async () => {
     const workspace = await bridgeCall('workspace.get', { path: projectPath });
-    found = workspace.tasks.find((task) => task.kind === kind && task.id !== excluding);
+    found = workspace.tasks.find((task) => task.kind === kind && !excluding.includes(task.id));
     return found?.id ?? '';
   }, { timeout: 30000 }).not.toBe('');
   return found;
@@ -275,7 +275,7 @@ try {
   await configure(largest, 'Native stress cancellation');
   await installProbe();
   await button('开始分析').click();
-  const started = await latestTask(copies.stress, 'analysis');
+  const started = await latestTask(copies.stress, 'analysis', before.tasks.map((task) => task.id));
   expect(started.status).toBe('running');
   report.stressTaskId = started.id;
   await page.evaluate(() => { window.__analysisProbe.phase = true; });
@@ -309,7 +309,7 @@ try {
   await closeProject();
   await openProject(copies.recovery);
   const recoveryBefore = await bridgeCall('workspace.get', { path: copies.recovery });
-  const previousId = recoveryBefore.tasks.find((item) => item.kind === 'analysis')?.id;
+  const previousId = recoveryBefore.tasks.map((item) => item.id);
   await configure(smallest, 'Native completed recovery');
   await button('开始分析').click();
   const recoveryTask = await latestTask(copies.recovery, 'analysis', previousId);
@@ -322,7 +322,7 @@ try {
   expect(statistics.record.inputs[0].datasetId).toBe(smallest.inputDatasetId);
   await screenshot('recovery-statistics');
   for (const [label, filename] of [['导出成果 GeoPackage', 'result-export.gpkg'], ['导出统计 CSV', 'statistics-export.csv']]) {
-    const prior = (await bridgeCall('workspace.get', { path: copies.recovery })).tasks.find((item) => item.kind === 'export')?.id;
+    const prior = (await bridgeCall('workspace.get', { path: copies.recovery })).tasks.map((item) => item.id);
     await button(label).click();
     const task = await latestTask(copies.recovery, 'export', prior);
     expect((await terminal(copies.recovery, task.id)).status).toBe('completed');
@@ -354,7 +354,7 @@ try {
     await closeProject();
     await openProject(copies.stress);
     await configure(largest, 'Native full large completion');
-    const previous = (await bridgeCall('workspace.get', { path: copies.stress })).tasks.find((item) => item.kind === 'analysis')?.id;
+    const previous = (await bridgeCall('workspace.get', { path: copies.stress })).tasks.map((item) => item.id);
     await button('开始分析').click();
     const largeTask = await latestTask(copies.stress, 'analysis', previous);
     expect(largeTask.status).toBe('running');

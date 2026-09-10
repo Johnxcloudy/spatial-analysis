@@ -4,7 +4,11 @@ Windows-first personal GIS workstation for land-use overlay and area statistics.
 
 ## Current Scope
 
-Phase 2 is authorized and in development: land overlay/area statistics and pressure acceptance for the user's typical 100000–500000 parcels. Target application 0.6.0, public protocol/schema 6, worker 5. Read docs/phase-2.md and docs/superpowers/plans/2026-09-10-phase-2.md. Phase 1D (0.5.0) was delivered with local acceptance and Windows CI 34426091682 for 41fe4b5; that historical evidence does not verify Phase 2. Synthetic acceptance continues. Formal cartography and Agent assistance remain future work. Read the latest user instruction and 执行说明.md before selecting work; shared/contracts.ts owns public contracts.
+Phase 2 (0.6.0) is delivered as an internal trial release: land overlay/area statistics for the user's typical 100000–500000 parcels. Public protocol/schema 6, worker 5, readiness 1. Local synthetic source regression, final frozen five-level acceptance, full 500000 native UI run, distribution/install and Windows CI passed. Feature commit 9258d7859ef3c832bfd481be266df2e2250ddcf5 is pushed; Windows CI 34434218036 succeeded (29 visible steps). Closeout scripts/docs use a separate [skip ci] commit located by subject "chore: close Phase 2 delivery"; do not apply feature CI to unverified later code. Read docs/phase-2.md, docs/verification-phase-2.md and docs/superpowers/plans/2026-09-10-phase-2.md.
+
+Next priority is default attribute pagination stable ordering/indexes, explicit retry and cold-read acceptance. One unfiltered vector.page query_timeout occurred; the subsequent run succeeded. EXPLAIN shows scan/temp sort but does not establish the unique cause; bounded response is not a promise that all queries succeed. Real planning data, ArcGIS comparison, independent Windows and offline/upgrade acceptance remain open. Formal cartography and Agent assistance remain future work. Read the latest user instruction and 执行说明.md before authorizing/selecting the next milestone; shared/contracts.ts owns public contracts.
+
+Phase 2 worker assignments are closed; establish new explicit ownership before parallel edits. Native acceptance processes and Vite were cleaned up at closeout; recheck transient process state on resume. Historical Phase 1D (0.5.0) acceptance/CI remains separate evidence.
 
 ## Required Stage Closeout
 
