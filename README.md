@@ -1,10 +1,10 @@
 # Spatial Analysis Desktop
 
-**当前开发：0.6.1 / Phase 3A**，改进大数据默认分页和属性/统计查询失败后的显式重试，加入用户本地真实GDB保全验收。完整回归通过，最终分发与CI仍在验收；当前状态见[执行说明](执行说明.md)、[范围](docs/phase-3a.md)和[验证记录](docs/verification-phase-3a.md)。下面的Phase2数字保留为历史基线。
+**当前版本：0.6.1 / Phase 3A，本机验收完成，远程验收待闭环。** 默认分页优化和属性/统计显式重试已实现；真实GDB的127面、1个无效几何保留，导入/导出/另存重开通过。10万/25万/50万共36次冻结分页零失败、p95 265.148ms；当前回归Python312、前端113、Rust10通过，NSIS及本机安装/卸载通过。PR CI的Python测试失败尚未解释，不能宣布全部CI通过。准确状态见[执行说明](执行说明.md)、[范围](docs/phase-3a.md)和[验证记录](docs/verification-phase-3a.md)。
 
 面向土地利用、用地叠加与面积统计的 Windows 本地 GIS 工作站。**0.6.0 / Phase 2：土地叠加与分类面积** 已交付为内部可试用版本，使用完整托管快照执行裁剪/相交。本机合成数据五级压力（1 千至 50 万图斑）、最终冻结、发布版完整分析与交互、分发安装及 Windows CI 已通过；不等于真实数据或独立机器验收。当前公共协议/项目 schema 为 6、worker 协议 5、readiness 协议 1。准确证据见 [Phase 2 验证记录](docs/verification-phase-2.md) 与 [执行说明](执行说明.md)，历史交付记录保留。
 
-最终回归：Python 293、前端 106、Rust 10 项通过。功能提交 `9258d7859ef3c832bfd481be266df2e2250ddcf5` 已推送，[Windows CI 34434218036](https://github.com/Johnxcloudy/spatial-analysis/actions/runs/34434218036) 成功；收尾脚本与文档另行提交，不将此 CI 视为未知后续提交的验证。
+历史0.6.0回归：Python293、前端106、Rust10项通过。历史功能提交 `9258d7859ef3c832bfd481be266df2e2250ddcf5` 的[Windows CI 34434218036](https://github.com/Johnxcloudy/spatial-analysis/actions/runs/34434218036) 成功；不将其视为当前0.6.1验收。
 
 ## 当前范围
 
@@ -81,13 +81,13 @@ GDB 支持范围是普通要素类；报告中标记“未读取”的高级元�
 
 超限会返回错误或明确的截断提示。地图上的部分显示不代表数据集已完整显示，显示限制不改变托管快照。地图选中的要素若不在当前属性页，会在表格上方显示该记录。
 
-0.6.1默认无筛选属性分页先只读验证内部ID与实际整数主键对应，再直接寻址；每次仍有验证扫描，自定义排序/筛选和不符合条件的快照保留原查询语义。查询失败显示“属性读取失败”和“重试当前页”，保持页码、每页数量、筛选和排序；统计页可“重试当前统计页”。程序不会自动无限重试，也不提高原有超时预算。切换项目或数据集后旧请求不再写入当前页面。
+0.6.1默认无筛选属性分页先只读验证内部ID与实际整数主键对应，再直接寻址；每次仍有验证扫描，自定义排序/筛选和不符合条件的快照保留原查询语义。查询失败显示“属性读取失败”和“重试当前页”，保持页码、每页数量、筛选和排序；统计页可“重试当前统计页”。程序不会自动无限重试，也不提高原有超时预算。切换项目或数据集后旧请求不再写入当前页面。最终原生分页测试有一次成功读取约4秒，耗时层级尚未定位，界面响应通过不等于每页瞬时完成；详细计时范围见验证记录。
 
 栅格导出沿用暂存副本和目标目录待发布副本流程，两个位置均需容纳一份完整文件。64 位整数像元原值以字符串返回；int64/uint64 波段中超出 JavaScript 安全整数范围的 NoData 标签拒绝导入，详见 Phase 1C 范围。正式面积使用指定投影下的平面几何面积，不代表台账面积或测绘精度；未知 CRS、Web Mercator、三维/复合 CRS、范围不适合及缺失转换格网均被拒绝。
 
 50 万图斑是有几何复杂度、候选量和内存边界的验收规模。简单图斑成功不保证任意 50 万复杂图斑都可计算；超预算会明确失败，保留输入和已有成果。显示截断不改变正式计算范围。CSV 请按文本列导入表格软件，避免其自动去除前导零；应用不执行分类文字中的表达式。
 
-发布版合成 50 万图斑完整分析耗时 354.201 秒；计算期间 DOM 反馈 p95 14.7 ms、事件循环最大停顿 24.8 ms、状态调用 p95 295.6 ms，另测取消到终态 445 ms。状态测量为测试工具发起的真实 native invoke，不含应用 JavaScript 排队。曾出现一次无筛选 `vector.page` 的受控 `query_timeout`，重启后同流程成功；默认数字 ID 排序的查询计划有扫描和临时排序，不能据此断言该次超时的唯一原因。本版保证查询有界，不承诺冷读永不超时；后续优先稳定排序键/索引、明确重试与冷读验收。
+历史0.6.0发布版合成50万完整分析354.201秒；计算期间DOM反馈p95 14.7ms、事件循环最大24.8ms、状态p95 295.6ms，另测取消445ms。曾出现一次默认分页query_timeout，后续成功，不能以查询计划断言唯一原因。0.6.1改进默认分页并提供显式重试，最终50万分页交互DOM p95 12.8ms/事件循环最大30ms；这次没有重跑完整50万分析，DOM反馈也不是整页查询耗时。新进程/连接不等于清空系统缓存，仍保留冷读验收。
 
 历史 Shapefile 的组成文件若使用混合大小写基名，保持各文件原有名称与大小写、仅移动目录时可以重新定位；整组改名后可能无法匹配旧身份。旧版来源元数据没有保存每个组成文件的原始名称大小写，不能从已有指纹还原，程序不会猜测或绕过核对。
 
@@ -95,7 +95,7 @@ CART-00 制图草案和独立渲染探针已完成，验证了完整合成样本
 
 ## 安装与开发
 
-Windows x64 安装器使用 NSIS，包含 Python/GDAL 引擎和 WebView2 离线安装组件；安装版无需另外安装 Python。0.6.0 的本机临时安装、安装后分析运行和卸载已验收；完整压力、发布版交互和 CI 状态见 [当前验证记录](docs/verification-phase-2.md)。安装包尚未签名，独立 Windows 10/11、离线环境和真实规划数据仍待验收。
+Windows x64安装器使用NSIS，包含Python/GDAL引擎和WebView2离线安装组件；安装版无需另外安装Python。0.6.1本机临时安装、安装后分析运行和卸载已验收；产物校验和、发布版交互与CI状态见[当前验证记录](docs/verification-phase-3a.md)。安装包尚未签名，独立Windows10/11、离线/升级和真实正式业务分析仍待验收。
 
 开发环境需要 Node.js 24、Rust 1.98 或以上、Visual Studio C++ Build Tools、Windows SDK、WebView2 和 uv。冻结引擎验证脚本需要 PowerShell 7。Python 3.12 及 GIS 依赖由 uv 安装到 `gis-engine/.venv`。
 
@@ -136,7 +136,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1
 
 安装器输出到 apps/desktop/src-tauri/target/release/bundle/nsis/。构建包含 PyInstaller 引擎和 WebView2 离线安装组件，首次构建会下载较多依赖。安装包尚未签名，不等于正式生产发布。
 
-实际测试、原生工作流、安装包和校验和记录见 [Phase 2 验证记录](docs/verification-phase-2.md)，未完成项以记录为准。历史 [Phase 1D](docs/verification-phase-1d.md)、[Phase 1C](docs/verification-phase-1c.md)、[Phase 1B](docs/verification-phase-1b.md)、[Phase 1A](docs/verification-phase-1a.md) 与 [Phase 0](docs/verification.md) 记录保留，不用于替代当前版本验收。
+实际测试、原生工作流、安装包和校验和见[Phase 3A验证记录](docs/verification-phase-3a.md)，未完成项以记录为准。历史[Phase 2](docs/verification-phase-2.md)、[Phase 1D](docs/verification-phase-1d.md)、[Phase 1C](docs/verification-phase-1c.md)、[Phase 1B](docs/verification-phase-1b.md)、[Phase 1A](docs/verification-phase-1a.md)与[Phase 0](docs/verification.md)记录保留，不代替当前版本验收。
 
 生成真实 GDAL 驱动写出的合成样本，并验证开发引擎的四类格式导入、查询、导出和项目恢复：
 
