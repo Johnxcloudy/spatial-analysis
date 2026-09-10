@@ -167,7 +167,7 @@ def main():
     sampler = base.MemorySampler(rpc, output)
     try:
         report["runtime"] = rpc.call("runtime.info")
-        assert report["runtime"]["protocolVersion"] == 6
+        assert report["runtime"]["protocolVersion"] == 7
         if args.executable:
             assert report["runtime"]["packaged"] is True
         verify(rpc, output, report)

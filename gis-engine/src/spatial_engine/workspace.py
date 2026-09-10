@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterator
 
 from .errors import DomainError, InvalidParamsError
+from . import cartography
 from .projects import ProjectSession, ProjectStore, _same_path, _utc_now
 from .validation import MAX_NAME_LENGTH, require_exact_keys, require_finite_number, require_path, require_string
 
@@ -23,6 +24,11 @@ MAX_WORKSPACE_JSON_BYTES = 6 * 1024 * 1024
 MAX_FIELDS = 256
 _HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 _TASK_STATUSES = {"running", "completed", "failed", "cancelled", "interrupted"}
+_LAYER_SELECT = (
+    "SELECT map_layers.*, vector_cartography.revision AS cartography_revision, "
+    "vector_cartography.spec_json AS cartography_json FROM map_layers "
+    "LEFT JOIN vector_cartography ON vector_cartography.layer_id = map_layers.layer_id "
+)
 
 
 def _json_dumps(value: Any) -> str:
@@ -345,7 +351,7 @@ class WorkspaceStore:
             datasets = [self._stored_dataset(row["dataset_json"], row["dataset_id"]) for row in dataset_rows]
             datasets_by_id = {dataset["id"]: dataset for dataset in datasets}
             layers = [self._row_to_layer(row, datasets_by_id.get(row["dataset_id"])) for row in connection.execute(
-                "SELECT * FROM map_layers ORDER BY display_order, layer_id"
+                _LAYER_SELECT + "ORDER BY display_order, map_layers.layer_id"
             )]
             tasks = [_row_to_task(row) for row in connection.execute(
                 "SELECT * FROM tasks ORDER BY created_at DESC, task_id DESC LIMIT ?", (MAX_TASK_HISTORY,)
@@ -393,11 +399,18 @@ class WorkspaceStore:
         path = self._path(params["path"])
         layer_id = require_string(params["layerId"], "layerId", maximum=64)
         changes = params["changes"]
-        allowed = {"name", "visible", "opacity", "color", "categoryField", "categoryColors", "rasterStyle"}
+        allowed = {"name", "visible", "opacity", "color", "categoryField", "categoryColors", "rasterStyle",
+                   "cartography", "expectedCartographyRevision"}
         if not isinstance(changes, dict) or not changes or not set(changes) <= allowed:
             raise InvalidParamsError("changes must contain supported layer properties")
+        if ("cartography" in changes) != ("expectedCartographyRevision" in changes):
+            raise InvalidParamsError("cartography and expectedCartographyRevision must be supplied together")
+        if "cartography" in changes:
+            cartography.validate_revision(changes["expectedCartographyRevision"])
         with self._connect(path) as connection:
-            row = connection.execute("SELECT * FROM map_layers WHERE layer_id = ?", (layer_id,)).fetchone()
+            # Serialize the read/check/write so two drafts at the same revision cannot both win.
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(_LAYER_SELECT + "WHERE map_layers.layer_id = ?", (layer_id,)).fetchone()
             if row is None:
                 raise DomainError("Layer does not exist", kind="layer_not_found", detail=layer_id)
             values: dict[str, Any] = {}
@@ -420,8 +433,13 @@ class WorkspaceStore:
             if dataset_row is None:
                 raise DomainError("Layer references a missing dataset", kind="invalid_project", detail=layer_id)
             dataset = self._stored_dataset(dataset_row[0], row["dataset_id"])
+            current = self._row_to_layer(row, dataset)
             vector_changes = {"color", "categoryField", "categoryColors"} & set(changes)
             raster_changes = {"rasterStyle"} & set(changes)
+            if "cartography" in changes and dataset["kind"] != "vector":
+                raise InvalidParamsError("cartography is only supported for vector layers")
+            if vector_changes and (current.get("cartography") is not None or "cartography" in changes):
+                raise InvalidParamsError("Restore cartography separately before editing legacy vector style properties")
             if dataset["kind"] == "vector":
                 if raster_changes:
                     raise InvalidParamsError("rasterStyle is only supported for raster layers")
@@ -452,12 +470,30 @@ class WorkspaceStore:
                     values["raster_style"] = _json_dumps(rasters.validate_style(changes["rasterStyle"], dataset))
             else:
                 raise DomainError("Table datasets cannot have map layers", kind="invalid_project", detail=layer_id)
-            assignments = ", ".join(f"{column} = ?" for column in values)
-            connection.execute(
-                f"UPDATE map_layers SET {assignments} WHERE layer_id = ?", (*values.values(), layer_id)
-            )
-            updated = connection.execute("SELECT * FROM map_layers WHERE layer_id = ?", (layer_id,)).fetchone()
-        return self._row_to_layer(updated, dataset)
+            if "cartography" in changes:
+                revision = current.get("cartographyRevision", 0)
+                if changes["expectedCartographyRevision"] != revision:
+                    raise DomainError("Cartography changed since this draft was opened", kind="cartography_conflict",
+                                      detail=f"expected {changes['expectedCartographyRevision']}, current {revision}")
+                next_revision = cartography.validate_revision(revision + 1, minimum=1)
+                serialized = None
+                if changes["cartography"] is not None:
+                    spec = cartography.validate_spec(changes["cartography"], dataset)
+                    if spec["revision"] != next_revision:
+                        raise InvalidParamsError("cartography revision must be the current revision plus one")
+                    serialized = cartography.encode_spec(spec)
+                connection.execute(
+                    "INSERT INTO vector_cartography (layer_id, revision, spec_json) VALUES (?, ?, ?) "
+                    "ON CONFLICT(layer_id) DO UPDATE SET revision = excluded.revision, spec_json = excluded.spec_json",
+                    (layer_id, next_revision, serialized),
+                )
+            if values:
+                assignments = ", ".join(f"{column} = ?" for column in values)
+                connection.execute(
+                    f"UPDATE map_layers SET {assignments} WHERE layer_id = ?", (*values.values(), layer_id)
+                )
+            updated = connection.execute(_LAYER_SELECT + "WHERE map_layers.layer_id = ?", (layer_id,)).fetchone()
+            return self._row_to_layer(updated, dataset)
 
     def reorder_layers(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         require_exact_keys(params, {"path", "layerIds"})
@@ -476,11 +512,13 @@ class WorkspaceStore:
             for order, layer_id in enumerate(layer_ids):
                 connection.execute("UPDATE map_layers SET display_order = ? WHERE layer_id = ?", (order, layer_id))
             rows = connection.execute(
-                "SELECT map_layers.*, datasets.dataset_json FROM map_layers "
+                "SELECT map_layers.*, datasets.dataset_json, vector_cartography.revision AS cartography_revision, "
+                "vector_cartography.spec_json AS cartography_json FROM map_layers "
                 "JOIN datasets ON datasets.dataset_id = map_layers.dataset_id "
-                "ORDER BY display_order, layer_id"
+                "LEFT JOIN vector_cartography ON vector_cartography.layer_id = map_layers.layer_id "
+                "ORDER BY display_order, map_layers.layer_id"
             ).fetchall()
-        return [self._row_to_layer(row, self._stored_dataset(row["dataset_json"], row["dataset_id"])) for row in rows]
+            return [self._row_to_layer(row, self._stored_dataset(row["dataset_json"], row["dataset_id"])) for row in rows]
 
     def remove_layer(self, params: dict[str, Any]) -> dict[str, bool]:
         require_exact_keys(params, {"path", "layerId"})
@@ -982,4 +1020,21 @@ class WorkspaceStore:
                 raise DomainError("Vector layer has a raster style", kind="invalid_project", detail=row["layer_id"])
         else:
             raise DomainError("Table datasets cannot have map layers", kind="invalid_project", detail=row["layer_id"])
+        if row["cartography_revision"] is not None:
+            try:
+                if dataset["kind"] != "vector":
+                    raise InvalidParamsError("cartography references a non-vector layer")
+                revision = cartography.validate_revision(row["cartography_revision"], minimum=1)
+                raw = row["cartography_json"]
+                spec = None
+                if raw is not None:
+                    if not isinstance(raw, str) or len(raw.encode("utf-8")) > cartography.MAX_SPEC_BYTES:
+                        raise InvalidParamsError("cartography exceeds the stored JSON limit")
+                    spec = cartography.validate_spec(json.loads(raw), dataset)
+                    if spec["revision"] != revision:
+                        raise InvalidParamsError("cartography revision differs from its stored revision")
+                layer["cartography"] = spec
+                layer["cartographyRevision"] = revision
+            except (json.JSONDecodeError, TypeError, ValueError, RecursionError, InvalidParamsError) as exc:
+                raise DomainError("Vector cartography is corrupt", kind="invalid_project", detail=row["layer_id"]) from exc
         return layer

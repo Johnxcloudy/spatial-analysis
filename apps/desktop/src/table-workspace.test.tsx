@@ -26,8 +26,8 @@ afterAll(() => dialogMethods.forEach((method, index) => {
   else Reflect.deleteProperty(HTMLDialogElement.prototype, method);
 }));
 
-const project: Project = { id: 'tables-project', name: 'Tables', description: '', schemaVersion: 6, createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z', projectPath: 'C:/test/project.spa', analysisCrs: null, displayCrs: 'EPSG:3857', viewState: { center: [114, 27], zoom: 5 } };
-const runtime = { protocolVersion: 6, engineVersion: '0.5.0', pythonVersion: 'test', packaged: false, versions: {}, drivers: {}, logPath: 'test' };
+const project: Project = { id: 'tables-project', name: 'Tables', description: '', schemaVersion: 7, createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z', projectPath: 'C:/test/project.spa', analysisCrs: null, displayCrs: 'EPSG:3857', viewState: { center: [114, 27], zoom: 5 } };
+const runtime = { protocolVersion: 7, engineVersion: '0.5.0', pythonVersion: 'test', packaged: false, versions: {}, drivers: {}, logPath: 'test' };
 const table: TableDataset = {
   id: 'table-1', version: 'table-version', name: 'Coordinates', kind: 'table',
   source: { path: 'C:/test/points.csv', layer: 'records', driver: 'CSV', fingerprint: 'fixture', encoding: 'utf-8-sig', assignedCrs: null, crsWkt: null, metadata: { delimiter: ',' } },

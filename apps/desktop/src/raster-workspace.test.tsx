@@ -18,8 +18,8 @@ beforeAll(() => Object.defineProperties(HTMLDialogElement.prototype, { showModal
 afterAll(() => methods.forEach((method, index) => { const descriptor = descriptors[index]; if (descriptor) Object.defineProperty(HTMLDialogElement.prototype, method, descriptor); else Reflect.deleteProperty(HTMLDialogElement.prototype, method); }));
 afterEach(cleanup);
 
-const project: Project = { id: 'raster-project', name: 'Raster project', description: '', schemaVersion: 6, createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z', projectPath: 'C:/test/raster/project.spa', analysisCrs: null, displayCrs: 'EPSG:3857', viewState: { center: [114, 27], zoom: 6 } };
-const runtime = { protocolVersion: 6, engineVersion: '0.5.0', pythonVersion: 'test', packaged: false, versions: {}, drivers: {}, logPath: 'fixture' };
+const project: Project = { id: 'raster-project', name: 'Raster project', description: '', schemaVersion: 7, createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z', projectPath: 'C:/test/raster/project.spa', analysisCrs: null, displayCrs: 'EPSG:3857', viewState: { center: [114, 27], zoom: 6 } };
+const runtime = { protocolVersion: 7, engineVersion: '0.5.0', pythonVersion: 'test', packaged: false, versions: {}, drivers: {}, logPath: 'fixture' };
 const style: RasterStyle = { mode: 'gray', bands: [1], ranges: [[0, 100]], resampling: 'nearest' };
 const raster: RasterDataset = {
   id: 'raster-1', name: 'Terrain', kind: 'raster', version: 'raster-version', relativePath: 'rasters/raster.tif', createdAt: project.createdAt,

@@ -63,10 +63,10 @@ def page_query(path: str, dataset_id: str) -> dict:
 
 def verify(rpc: Rpc, output: Path, checks: list[str], export_directory: Path) -> dict:
     runtime = rpc.call("runtime.info")
-    assert runtime["protocolVersion"] == 6 and runtime["engineVersion"] == "0.6.2", runtime
+    assert runtime["protocolVersion"] == 7 and runtime["engineVersion"] == "0.7.0", runtime
     assert "openpyxl" in runtime["versions"]
     project = rpc.call("project.create", {"directory": str(output / "project"), "name": "Table acceptance"})
-    assert project["schemaVersion"] == 6
+    assert project["schemaVersion"] == 7
     path = project["projectPath"]
     inputs = fixtures(output / "sources")
     xlsx_options = inputs[-1]

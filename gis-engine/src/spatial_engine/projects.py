@@ -23,7 +23,7 @@ from .validation import (
 )
 
 APPLICATION_ID = 0x53504131
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 PROJECT_IDENTITY = "spatial-analysis-desktop-project"
 PROJECT_FILENAME = "project.spa"
 OWNED_DIRECTORIES = ("datasets", "rasters", "results", "staging", "cache", "backups")
@@ -93,8 +93,10 @@ def _read_project(path: Path, *, accepted_versions: frozenset[int] | None = None
             _validate_v4_schema(connection)
         elif schema_version == 5:
             _validate_v5_schema(connection)
-        elif schema_version == SCHEMA_VERSION:
+        elif schema_version == 6:
             _validate_v6_schema(connection)
+        elif schema_version == SCHEMA_VERSION:
+            _validate_v7_schema(connection)
         row = connection.execute(
             "SELECT identity, project_id, name, description, created_at, updated_at, "
             "analysis_crs, display_crs, view_state FROM project_metadata WHERE singleton = 1"
@@ -411,6 +413,28 @@ def _validate_v6_schema(connection: sqlite3.Connection) -> None:
         raise sqlite3.DatabaseError("project analysis task kind is missing")
 
 
+def _create_v7_schema(connection: sqlite3.Connection) -> None:
+    _create_v6_schema(connection)
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS vector_cartography ("
+        "layer_id TEXT PRIMARY KEY NOT NULL REFERENCES map_layers(layer_id) ON DELETE CASCADE, "
+        "revision INTEGER NOT NULL CHECK (revision BETWEEN 1 AND 9007199254740991), spec_json TEXT)"
+    )
+
+
+def _validate_v7_schema(connection: sqlite3.Connection) -> None:
+    _validate_v6_schema(connection)
+    columns = {row[1]: (row[2].upper(), row[3], row[5])
+               for row in connection.execute("PRAGMA table_info(vector_cartography)")}
+    if columns != {"layer_id": ("TEXT", 1, 1), "revision": ("INTEGER", 1, 0), "spec_json": ("TEXT", 0, 0)}:
+        raise sqlite3.DatabaseError("project vector cartography table has an incompatible schema")
+    references = list(connection.execute("PRAGMA foreign_key_list(vector_cartography)"))
+    if len(references) != 1 or tuple(references[0][2:5]) != ("map_layers", "layer_id", "layer_id") or references[0][6] != "CASCADE":
+        raise sqlite3.DatabaseError("project vector cartography layer reference is invalid")
+    if connection.execute("PRAGMA foreign_key_check(vector_cartography)").fetchone():
+        raise sqlite3.DatabaseError("project vector cartography contains an invalid layer reference")
+
+
 def _backup_project(path: Path, source_version: int) -> Path:
     backup_directory = path.parent / "backups"
     backup_directory.mkdir(parents=True, exist_ok=True)
@@ -476,10 +500,10 @@ def _migrate_to_current(path: Path, source_version: int) -> None:
         elif source_version == 3:
             connection.execute("ALTER TABLE map_layers ADD COLUMN raster_style TEXT")
             _create_v4_schema(connection)
-        elif source_version not in {4, 5}:
+        elif source_version not in {4, 5, 6}:
             raise sqlite3.DatabaseError(f"cannot migrate schema version {source_version}")
-        _create_v6_schema(connection)
-        _validate_v6_schema(connection)
+        _create_v7_schema(connection)
+        _validate_v7_schema(connection)
         violations = connection.execute("PRAGMA foreign_key_check").fetchall()
         if violations:
             raise sqlite3.DatabaseError("project contains invalid foreign key references")
@@ -575,8 +599,8 @@ class ProjectStore:
                             json.dumps({"center": [114.0, 27.1], "zoom": 5.0}, separators=(",", ":")),
                         ),
                     )
-                    _create_v6_schema(connection)
-                    _validate_v6_schema(connection)
+                    _create_v7_schema(connection)
+                    _validate_v7_schema(connection)
                     connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                     connection.commit()
                 except Exception:
@@ -617,7 +641,7 @@ class ProjectStore:
         require_exact_keys(params, {"path"})
         path = require_path(params["path"], "path")
         if self._session and _same_path(path, self._session.path):
-            current = _read_project(path, accepted_versions=frozenset({1, 2, 3, 4, 5, SCHEMA_VERSION}))
+            current = _read_project(path, accepted_versions=frozenset({1, 2, 3, 4, 5, 6, SCHEMA_VERSION}))
             if current["schemaVersion"] < SCHEMA_VERSION:
                 try:
                     source_version = current["schemaVersion"]
@@ -628,10 +652,10 @@ class ProjectStore:
                         "Could not migrate project", kind="project_migration_failed", detail=str(exc)
                     ) from exc
             return _read_project(path)
-        _read_project(path, accepted_versions=frozenset({1, 2, 3, 4, 5, SCHEMA_VERSION}))
+        _read_project(path, accepted_versions=frozenset({1, 2, 3, 4, 5, 6, SCHEMA_VERSION}))
         session = _acquire_lock(path)
         try:
-            candidate = _read_project(path, accepted_versions=frozenset({1, 2, 3, 4, 5, SCHEMA_VERSION}))
+            candidate = _read_project(path, accepted_versions=frozenset({1, 2, 3, 4, 5, 6, SCHEMA_VERSION}))
             if candidate["schemaVersion"] < SCHEMA_VERSION:
                 source_version = candidate["schemaVersion"]
                 _backup_project(path, source_version)

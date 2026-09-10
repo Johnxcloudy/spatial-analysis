@@ -30,7 +30,7 @@ def test_project_create_save_close_open_round_trip(tmp_path: Path) -> None:
     project_dir = tmp_path / "含空格 project"
 
     created = engine.dispatch("project.create", {"directory": str(project_dir), "name": "Land study"})
-    assert created["schemaVersion"] == 6
+    assert created["schemaVersion"] == 7
     assert created["name"] == "Land study"
     assert created["description"] == ""
     assert created["analysisCrs"] is None
@@ -189,7 +189,7 @@ def test_open_migrates_v1_after_creating_a_valid_backup(tmp_path: Path) -> None:
 
     opened = Engine().dispatch("project.open", {"path": str(project_path)})
 
-    assert opened["schemaVersion"] == 6
+    assert opened["schemaVersion"] == 7
     backups = list((project_path.parent / "backups").glob("*.spa"))
     assert len(backups) == 1
     with sqlite3.connect(backups[0]) as backup:
@@ -225,7 +225,7 @@ def test_failed_migration_rolls_back_releases_lock_and_keeps_active_project(
 
     monkeypatch.setattr(project_module, "_migrate_to_current", real_migrate)
     contender = Engine()
-    assert contender.dispatch("project.open", {"path": str(legacy_path)})["schemaVersion"] == 6
+    assert contender.dispatch("project.open", {"path": str(legacy_path)})["schemaVersion"] == 7
     contender.close()
 
 
@@ -279,7 +279,7 @@ def test_open_migrates_v2_registry_tasks_and_layers_with_v2_backup(tmp_path: Pat
 
     opener = Engine()
     opened = opener.dispatch("project.open", {"path": str(project_path)})
-    assert opened["schemaVersion"] == 6
+    assert opened["schemaVersion"] == 7
     with sqlite3.connect(project_path) as connection:
         assert connection.execute("SELECT dataset_id FROM datasets").fetchone()[0] == dataset_id
         assert connection.execute("SELECT layer_id FROM map_layers").fetchone()[0] == layer_id
@@ -346,7 +346,7 @@ def test_open_migrates_v3_datasets_tasks_layers_and_journals_with_backup(tmp_pat
     opener = Engine()
     opened = opener.dispatch("project.open", {"path": str(project_path)})
 
-    assert opened["schemaVersion"] == 6
+    assert opened["schemaVersion"] == 7
     with sqlite3.connect(project_path) as connection:
         assert connection.execute("SELECT dataset_id FROM datasets ORDER BY dataset_id").fetchall() == [(vector_id,), (table_id,)]
         assert connection.execute("SELECT layer_id, raster_style FROM map_layers").fetchone() == (layer_id, None)

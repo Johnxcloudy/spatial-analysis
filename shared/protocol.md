@@ -1,12 +1,12 @@
-# Desktop engine protocol v6
+# Desktop engine protocol v7
 
-Transport: persistent console sidecar, UTF-8 newline-delimited JSON-RPC 2.0. The host assigns request IDs and serializes calls. One response line per request. No protocol chatter or logs on stdout. A 90-second host deadline terminates an unresponsive process tree. Import/export/point/copy/relocation jobs execute in a child worker, while short task polling remains responsive. Methods not listed here are rejected. Responses use camelCase matching shared/contracts.ts. Protocol version is 6. Requests are limited to 1 MiB; responses to 8 MiB including the newline. Oversize responses return a domain error without losing the active project.
+Transport: persistent console sidecar, UTF-8 newline-delimited JSON-RPC 2.0. The host assigns request IDs and serializes calls. One response line per request. No protocol chatter or logs on stdout. A 90-second host deadline terminates an unresponsive process tree. Import/export/point/copy/relocation jobs execute in a child worker, while short task polling remains responsive. Methods not listed here are rejected. Responses use camelCase matching shared/contracts.ts. Protocol version is 7. Requests are limited to 1 MiB; responses to 8 MiB including the newline. Oversize responses return a domain error without losing the active project.
 
 ## Methods
 
 - runtime.info, params {} -> RuntimeInfo. Load actual GIS libraries and report actual GDAL driver capabilities, not assumed availability.
 - project.create, params {directory: string, name: string} -> Project. directory is the intended NEW project directory (may exist if project.spa does not). name is a nonempty display name. Create project.spa and owned subdirectories; never overwrite a project. Default description empty, analysisCrs null, displayCrs EPSG:3857, viewState {center:[114,27.1],zoom:5}. Engine holds a lock for the active project. Creation/open closes the previously active project only after the new operation succeeds.
-- project.open, params {path: string} -> Project. path is an existing project.spa. Validate identity and schema before any writes; acquire an exclusive OS-backed lock, fail clearly if held by another engine. Back up schema v1/v2/v3/v4/v5 via SQLite backup, validate that backup, then migrate transactionally to v6. Reject future schema versions, corrupt files and incomplete project copies.
+- project.open, params {path: string} -> Project. path is an existing project.spa. Validate identity and schema before any writes; acquire an exclusive OS-backed lock, fail clearly if held by another engine. Back up schema v1/v2/v3/v4/v5/v6 via SQLite backup, validate that backup, then migrate transactionally to v7. Reject future schema versions, corrupt files and incomplete project copies.
 - project.save, params {path:string, name:string, description:string, analysisCrs:string|null, displayCrs:string, viewState:{center:[number,number],zoom:number}} -> Project. Must refer to the active project. Validate finite coordinates, zoom and CRS. Use an atomic SQLite transaction; preserve id/createdAt and update updatedAt. Invalid inputs must not change the project.
 - project.close, params {} -> {closed:true}. Release active project lock.
 - diagnostics.run, params {directory:string} -> ProbeReport. directory is for generated diagnostic artifacts (a cache folder, not original inputs). Create a unique subdirectory per run. Test a 100m x 100m rectangle at x=500000, y=3000000 in EPSG:4547; overlay with a 50m-shifted rectangle produces 5000m2 intersection. Measure the full rectangle as 10000m2. Use GeoPandas/Shapely, real GeoPackage IO, and PROJ forward/inverse transformation; report pass/fail checks and generate WGS84 GeoJSON preview of source/intersection. Save a JSON report. Check actual OpenFileGDB and GeoTIFF driver availability and tiny raster IO if installed. Preserve original data. Probe is synthetic and is not real-world survey accuracy validation.
@@ -15,7 +15,20 @@ Phase 1A methods are `source.inspect`, `workspace.get`, `vector.import`, `vector
 
 The Python entry point is `python -m spatial_engine` (stdio). `--request '<JSON request>'` runs one request and exits for CI/package smoke tests. The frozen console executable is named spatial-engine.exe and accepts the same switch. The private `--worker <request-file>` mode executes one GIS job in its staging directory, using atomic progress/result files; stdout remains unused by the worker. Project metadata is modified only by the parent service.
 
-Application version 0.6.1. Project schema version 6. The engine stores its rotating log under LOCALAPPDATA/SpatialAnalysis/logs/engine.log (with an appropriate non-Windows development fallback). No log tokens or secrets. Error response: {jsonrpc:"2.0",id,error:{code,message,data?:{kind,detail?}}}. Standard parse/invalid-request/method/params errors use -32700/-32600/-32601/-32602. Domain failures use -32000 with stable data.kind. A syntactically valid JSON value that is not an RPC object is an invalid request; a parser recursion failure is a parse error.
+Application version 0.7.0. Project schema version 7. The engine stores its rotating log under LOCALAPPDATA/SpatialAnalysis/logs/engine.log (with an appropriate non-Windows development fallback). No log tokens or secrets. Error response: {jsonrpc:"2.0",id,error:{code,message,data?:{kind,detail?}}}. Standard parse/invalid-request/method/params errors use -32700/-32600/-32601/-32602. Domain failures use -32000 with stable data.kind. A syntactically valid JSON value that is not an RPC object is an invalid request; a parser recursion failure is a parse error.
+
+## CART-01A vector cartography
+
+`layer.update` accepts `changes.cartography` (VectorCartographySpec v1 or null)
+together with `changes.expectedCartographyRevision` (safe nonnegative integer).
+Both fields are required together. On adoption/update, spec revision must equal
+current revision+1; stale expected revisions fail atomically. On restore, the
+saved revision still increments and remains in a tombstone row. MapLayer returns
+cartography/cartographyRevision after the first adoption; absent revision means0.
+Active specs reject legacy color/categoryField/categoryColors edits; ordinary
+name/visible/opacity remain independent. Raster layers reject vector cartography.
+Strict validation and limits are defined in [Phase4A1](../docs/phase-4a1.md).
+This is a layer-style component: no layout, class discovery or formal export RPC.
 
 ## Phase 1B Methods
 
@@ -103,7 +116,7 @@ CART-00 is an isolated development probe with no public renderer method.
   boundaries which are unioned under a separate boundary budget. No repair.
 - analysis.result, params `{path,datasetId,offset,limit}` -> AnalysisResultPage.
   Result must have SpatialAnalysis lineage resolving to the active project's
-  input IDs/versions. Statistics are paged, at most 500 rows; record schema 1
+  input IDs/versions. Statistics are paged, at most 100 rows; record schema 1
   includes CRS/operation/units/versions and both study and coverage denominators.
 - analysis.exportCsv, params `{path,datasetId,destination}` -> Task(kind export).
   Destination must be a new .csv. UTF-8 BOM text includes explicit NULL flags

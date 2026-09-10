@@ -1,6 +1,8 @@
 # Phase 1D 架构
 
-React 调用受限的 Tauri engine_request 命令。Rust 通过持久 Python 进程的 UTF-8 JSON Lines 管道发送 JSON-RPC 2.0 请求，Python 管理项目、托管矢量/表格/GeoTIFF 和任务。接口见 shared/protocol.md，前端类型见 shared/contracts.ts，当前阶段约束见 phase-1d.md。
+React 调用受限的 Tauri engine_request 命令。Rust 通过持久 Python 进程的 UTF-8 JSON Lines 管道发送 JSON-RPC 2.0 请求，Python 管理项目、托管矢量/表格/GeoTIFF 和任务。接口见 shared/protocol.md，前端类型见 shared/contracts.ts，当前阶段约束见 phase-4a1.md。
+
+矢量专题配置由 Python 严格校验，存入独立 vector_cartography 表；修改和恢复均比较 revision 后在事务中提交。React 保留本地草稿，地图和图例共用符号解析；样式不修改托管快照、几何、统计或单位。颜色修改只重绘已加载的有界视窗，分类字段变化才请求对应属性。布局与正式输出是后续能力。
 
 ## 进程职责
 

@@ -124,7 +124,7 @@ def test_schema_six_keeps_old_tasks_and_backs_up_v5(tmp_path: Path):
         db.execute('PRAGMA user_version=5')
     reopened = projects.open({'path': project['projectPath']})
     try:
-        assert reopened['schemaVersion'] == 6
+        assert reopened['schemaVersion'] == 7
         assert workspace.task(old['id'])['status'] == 'cancelled'
         task = workspace.create_task('analysis')
         assert task['kind'] == 'analysis'

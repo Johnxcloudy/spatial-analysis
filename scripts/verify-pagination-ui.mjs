@@ -4,6 +4,7 @@ import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { verifyCartographyUi } from './cartography-ui-checks.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(path.join(root, 'apps/desktop/package.json'));
@@ -12,21 +13,34 @@ const arg = (name, fallback) => { const index = process.argv.indexOf(name); retu
 const realReportPath = arg('--real-report');
 const largeReportPath = arg('--large-report');
 const executable = arg('--executable');
-const expectedVersion = arg('--expected-version', '0.6.2');
+const expectedVersion = arg('--expected-version', '0.7.0');
 const diagnostics = process.argv.includes('--diagnostics');
+const cartography = process.argv.includes('--cartography');
+if (cartography && !diagnostics) throw new Error('--cartography requires --diagnostics for geometry-refetch assertions.');
 if (!realReportPath || !largeReportPath || !executable) throw new Error('--real-report, --large-report and --executable are required.');
 const real = JSON.parse(await readFile(realReportPath, 'utf8'));
 const largeReport = JSON.parse(await readFile(largeReportPath, 'utf8'));
 if (!real.ok || !largeReport.ok) throw new Error('Both source fixture reports must pass.');
 const large = largeReport.levels.find((item) => item.ok && item.features === 500000 && item.options?.operation === 'clip');
 if (!large || !real.projectPath || !real.datasetId) throw new Error('Expected successful 127-feature real and 500000-feature synthetic fixtures.');
-const output = path.join(root, '.artifacts', `${diagnostics ? 'phase3b-ui-investigation' : 'phase3a-ui'}-${Date.now()}`);
+const output = path.join(root, '.artifacts', `${cartography ? 'phase4a1-ui' : diagnostics ? 'phase3b-ui-investigation' : 'phase3a-ui'}-${Date.now()}`);
 await mkdir(output);
 const copies = {};
 for (const [name, projectPath] of [['real', real.projectPath], ['large', large.projectPath]]) {
   const destination = path.join(output, name);
   await cp(path.dirname(projectPath), destination, { recursive: true, errorOnExist: true, force: false });
   copies[name] = path.join(destination, path.basename(projectPath));
+}
+const cartographyCases = [];
+if (cartography) for (const features of [100000, 250000, 500000]) {
+  const fixture = largeReport.levels.find((item) => item.ok && item.features === features && item.options?.operation === 'clip');
+  if (!fixture) throw new Error(`Missing successful ${features} cartography fixture.`);
+  if (features !== 500000) {
+    const destination = path.join(output, `large${features}`);
+    await cp(path.dirname(fixture.projectPath), destination, { recursive: true, errorOnExist: true, force: false });
+    copies[`large${features}`] = path.join(destination, path.basename(fixture.projectPath));
+  }
+  cartographyCases.push({ features, inputDatasetId: fixture.inputDatasetId, projectPath: features === 500000 ? copies.large : copies[`large${features}`] });
 }
 const sha256 = async (file) => createHash('sha256').update(await readFile(file)).digest('hex');
 const report = { ok: false, startedAt: new Date().toISOString(), output, copies, fixtures: { real: path.resolve(realReportPath), large: path.resolve(largeReportPath) }, release: { path: path.resolve(executable), sha256: await sha256(executable) }, thresholds: { domAckP95Ms: 150, eventLoopMaxStallMs: 500 }, hardware: { cpu: os.cpus()[0]?.model, logicalCpus: os.cpus().length, totalMemoryBytes: os.totalmem(), freeMemoryAtStartBytes: os.freemem(), platform: os.platform(), release: os.release() }, checks: [], screenshots: [], pageErrors: [], rpcMeasurements: [], privacy: 'Local-only screenshots may contain real data; report omits row values and geometry. Real source is never opened for mutation.', rpcMeasurementScope: 'Harness RPC helper elapsed time, including native invokes and any query_unready readiness waits/retries; excludes application JS queue waiting. Every helper attempt and readiness wait is separately timed in the browser; fetch completion is response receipt, WebView fallback completion is unavailable. Diagnostics add observation overhead. DOM/timer metrics come only from the uninjected real-IPC synthetic pagination phase.' };
@@ -262,7 +276,7 @@ try {
   report.runtime = await rpc('runtime.info');
   expect(report.runtime.packaged).toBe(true);
   expect(report.runtime.engineVersion).toBe(expectedVersion);
-  expect(report.runtime.protocolVersion).toBe(6);
+  expect(report.runtime.protocolVersion).toBe(7);
   await expect(page.locator('.version-label')).toHaveText(expectedVersion);
 
   await phase('real127');
@@ -324,6 +338,7 @@ try {
   expect(report.measurements.eventLoopMaxStallMs).toBeLessThanOrEqual(500);
   report.checks.push({ name: 'uninjected500000-pagination-hidden-switch-and-interaction', ok: true, iterations: 16 });
 
+  if (cartography) await verifyCartographyUi({ page, expect, rpc, open, close, selectDataset, screenshot, phase, cases: cartographyCases, report });
   if (process.argv.includes('--inject-timeout')) {
     await phase('explicitly-injected-timeout');
     await page.evaluate((datasetId) => { window.__paginationInjection = { datasetId, remaining: 1, calls: [] }; }, large.inputDatasetId);

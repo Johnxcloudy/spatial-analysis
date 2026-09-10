@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 6 as const;
+export const PROTOCOL_VERSION = 7 as const;
 
 export interface ViewState {
   center: [number, number];
@@ -11,7 +11,7 @@ export interface Project {
   description: string;
   createdAt: string;
   updatedAt: string;
-  schemaVersion: 6;
+  schemaVersion: 7;
   projectPath: string;
   analysisCrs: string | null;
   displayCrs: string;
@@ -19,7 +19,7 @@ export interface Project {
 }
 
 export interface RuntimeInfo {
-  protocolVersion: 6;
+  protocolVersion: 7;
   engineVersion: string;
   pythonVersion: string;
   packaged: boolean;

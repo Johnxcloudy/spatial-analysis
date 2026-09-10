@@ -63,7 +63,7 @@ def driver_capabilities() -> dict[str, str]:
 
 def runtime_info() -> dict:
     return {
-        "protocolVersion": 6,
+        "protocolVersion": 7,
         "engineVersion": __version__,
         "pythonVersion": platform.python_version(),
         "packaged": bool(getattr(sys, "frozen", False)),

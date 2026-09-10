@@ -10,10 +10,11 @@ import ImageStatic from 'ol/source/ImageStatic';
 import { Circle as CircleStyle, Fill, Stroke, Style } from 'ol/style';
 import { fromLonLat, toLonLat, transformExtent } from 'ol/proj';
 import { ScaleLine } from 'ol/control';
-import type { Bounds, FeatureResult, FieldValue, MapLayer, RasterDataset, VectorDataset, ViewState } from '../../../../shared/contracts';
+import type { Bounds, DisplayFeature, FeatureResult, MapLayer, RasterDataset, VectorDataset, ViewState } from '../../../../shared/contracts';
 import type { DesktopBridge } from '../bridge';
 import { normalizeError } from '../bridge';
-import { categoryColor, translucent } from '../vector-style';
+import { activeCategoryField, createVectorStyleFunction, setVectorFeatureProperties } from '../vector-style';
+import { VectorLegend } from './VectorLegend';
 import { createRasterRenderer, rasterFrame, type RasterFrame } from '../raster-display';
 import { latestRequest } from '../latest-request';
 import { boundedDisplayLayers, boundedFeatures, DISPLAY_VERTEX_BUDGET, viewportLayerBudget } from '../vector-budget';
@@ -25,6 +26,14 @@ const selectedStyle = new Style({
   stroke: new Stroke({ color: '#d38317', width: 3 }),
   image: new CircleStyle({ radius: 7, fill: new Fill({ color: '#edb540' }), stroke: new Stroke({ color: '#583c1e', width: 2 }) }),
 });
+
+function readDisplayFeatures(features: DisplayFeature[]) {
+  const parsed = new GeoJSON().readFeatures({
+    type: 'FeatureCollection', features: features.map((feature) => ({ ...feature, properties: null })),
+  }, { dataProjection: 'EPSG:4326', featureProjection: 'EPSG:3857' });
+  parsed.forEach((feature, index) => setVectorFeatureProperties(feature, features[index].properties));
+  return parsed;
+}
 
 function geographicBounds(map: Map): Bounds | null {
   const size = map.getSize();
@@ -70,7 +79,7 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
   const displayed = boundedDisplayLayers(visible);
   const vectorLayers = displayed.filter((layer) => datasetMap.get(layer.datasetId)?.kind === 'vector');
   const rasterLayers = displayed.filter((layer) => datasetMap.get(layer.datasetId)?.kind === 'raster');
-  const queryKey = JSON.stringify(vectorLayers.map((layer) => [layer.id, layer.datasetId, datasetMap.get(layer.datasetId)?.version, layer.categoryField]));
+  const queryKey = JSON.stringify(vectorLayers.map((layer) => [layer.id, layer.datasetId, datasetMap.get(layer.datasetId)?.version, activeCategoryField(layer)]));
   const rasterKey = JSON.stringify(rasterLayers.map((layer) => [layer.id, layer.datasetId, datasetMap.get(layer.datasetId)?.version, layer.rasterStyle]));
   const bboxKey = JSON.stringify(bbox);
   const frameKey = JSON.stringify(frame);
@@ -148,12 +157,11 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
       layer.setOpacity(definition.opacity);
       layer.setZIndex(layers.length - index);
       if (!(layer instanceof VectorLayer)) return;
-      const styles = new globalThis.Map<string, Style>();
-      layer.setStyle((feature) => {
-        const color = categoryColor(definition, definition.categoryField ? feature.get(definition.categoryField) as FieldValue : undefined);
-        if (!styles.has(color)) styles.set(color, new Style({ fill: new Fill({ color: translucent(color, 0.33) }), stroke: new Stroke({ color, width: 1.6 }), image: new CircleStyle({ radius: 5, fill: new Fill({ color: translucent(color, 0.8) }), stroke: new Stroke({ color: '#ffffff', width: 1.1 }) }) }));
-        return styles.get(color)!;
-      });
+      const styleKey = JSON.stringify(definition.cartography ?? [definition.color, definition.categoryField, definition.categoryColors]);
+      if (layer.get('workspaceStyleKey') !== styleKey) {
+        layer.setStyle(createVectorStyleFunction(definition));
+        layer.set('workspaceStyleKey', styleKey);
+      }
     });
   }, [layers, datasets]);
 
@@ -178,14 +186,15 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
           if (cancelled) return;
           try {
             const dataset = datasetMap.get(layer.datasetId)!;
-            const result = await bridge.request('vector.viewport', { path, datasetId: dataset.id, bbox, limit: budget.perLayer, propertyFields: layer.categoryField ? [layer.categoryField] : [] }, controller.signal);
+            const field = activeCategoryField(layer);
+            const result = await bridge.request('vector.viewport', { path, datasetId: dataset.id, bbox, limit: budget.perLayer, propertyFields: field ? [field] : [] }, controller.signal);
             if (cancelled) return;
             if (result.datasetId !== dataset.id || result.version !== dataset.version) throw new Error('显示数据版本不匹配，请刷新工作区。');
             const displayLayer = mapLayers.current.get(layer.id);
             const source = displayLayer instanceof VectorLayer ? displayLayer.getSource() : null;
             const bounded = boundedFeatures(result.collection.features, remainingVertices);
             remainingVertices -= bounded.vertices;
-            const features = new GeoJSON().readFeatures({ ...result.collection, features: bounded.features }, { dataProjection: 'EPSG:4326', featureProjection: 'EPSG:3857' });
+            const features = readDisplayFeatures(bounded.features);
             source?.clear();
             source?.addFeatures(features);
             if (result.truncated) notices.push(`${layer.name}：当前显示 ${result.returnedCount} 个要素，结果已截断`);
@@ -243,8 +252,7 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
   useEffect(() => {
     highlight.current?.clear();
     if (selected?.feature) {
-      const feature = new GeoJSON().readFeature(selected.feature, { dataProjection: 'EPSG:4326', featureProjection: 'EPSG:3857' });
-      highlight.current?.addFeatures(Array.isArray(feature) ? feature : [feature]);
+      highlight.current?.addFeatures(readDisplayFeatures([selected.feature]));
     }
   }, [selected]);
 
@@ -263,6 +271,10 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
     {!visible.length && <div className="map-empty"><Crosshair size={30} strokeWidth={1.3} /><span>{layers.length ? '没有可显示的图层' : '未添加图层'}</span></div>}
     <div className="map-controls"><button className="icon-button" aria-label="地图放大" title="地图放大" disabled={locked} onClick={() => zoom(1)}><Plus size={18} /></button><button className="icon-button" aria-label="地图缩小" title="地图缩小" disabled={locked} onClick={() => zoom(-1)}><Minus size={18} /></button></div>
     {(loading || !!rasterBusy.size) && <span className="map-loading" role="status">读取显示数据</span>}
+    {vectorLayers.some((layer) => layer.cartography?.legend.visible) && <div className="map-legends" aria-label="地图已配置图例">{vectorLayers.map((layer) => {
+      const dataset = datasetMap.get(layer.datasetId);
+      return dataset?.kind === 'vector' ? <VectorLegend key={layer.id} layer={layer} geometryType={dataset.geometryType} /> : null;
+    })}</div>}
     {!!(issues.length + Object.keys(rasterIssues).length) && <div className="map-notices" role="status"><AlertTriangle size={15} /><div>{[...issues, ...Object.values(rasterIssues)].map((issue) => <p key={issue}>{issue}</p>)}</div></div>}
     <div className="map-coordinate">{coordinate || '显示 CRS：EPSG:3857'}</div>
   </div>;

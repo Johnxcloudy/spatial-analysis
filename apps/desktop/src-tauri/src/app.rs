@@ -61,7 +61,7 @@ async fn engine_request(
 async fn smoke_test(app: &AppHandle, directory: &std::path::Path) -> Result<Value, EngineError> {
     let engine = app.state::<EngineManager>();
     let runtime = engine.request(app, "runtime.info", json!({})).await?;
-    if runtime["protocolVersion"] != 6 || runtime["engineVersion"] != "0.6.2" {
+    if runtime["protocolVersion"] != 7 || runtime["engineVersion"] != "0.7.0" {
         return Err(EngineError::local(
             "SMOKE_VERSION_MISMATCH",
             runtime.to_string(),
@@ -409,7 +409,7 @@ async fn smoke_test(app: &AppHandle, directory: &std::path::Path) -> Result<Valu
         .request(app, "workspace.get", json!({"path":copied["projectPath"]}))
         .await?;
     if copied["id"] == created["id"]
-        || copied["schemaVersion"] != 6
+        || copied["schemaVersion"] != 7
         || copied["description"] != "Unsaved form copied without saving original"
         || copied_workspace["datasets"] != restored["datasets"]
         || copied_workspace["layers"] != restored["layers"]

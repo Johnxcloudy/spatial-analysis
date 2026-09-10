@@ -45,6 +45,8 @@ def _wait(manager, project, task):
 
 
 def test_mixed_save_as_preserves_original_metadata_and_snapshot_bytes(tmp_path):
+    from test_cartography import valid_spec
+
     projects, project, workspace, manager = _setup(tmp_path)
     datasets = [_publish(project, workspace, factory()) for factory in (_dataset, _table_dataset, _raster_dataset)]
     parent = datasets[1]
@@ -52,6 +54,15 @@ def test_mixed_save_as_preserves_original_metadata_and_snapshot_bytes(tmp_path):
     derived["source"].update(driver="TablePoints", path=str(workspace.managed_path(parent)),
                              fingerprint=parent["version"], metadata={"parentDatasetId": parent["id"], "parentVersion": parent["version"]})
     datasets.append(_publish(project, workspace, derived))
+    layers = workspace.get({"path": project["projectPath"]})["layers"]
+    vector_layer = next(layer for layer in layers if layer["datasetId"] == datasets[0]["id"])
+    workspace.update_layer({"path": project["projectPath"], "layerId": vector_layer["id"], "changes": {
+        "cartography": valid_spec(datasets[0]), "expectedCartographyRevision": 0,
+    }})
+    derived_layer = next(layer for layer in layers if layer["datasetId"] == derived["id"])
+    workspace.update_layer({"path": project["projectPath"], "layerId": derived_layer["id"], "changes": {
+        "cartography": None, "expectedCartographyRevision": 0,
+    }})
     before = workspace.get({"path": project["projectPath"]})
     params = {**valid_save(project), "directory": str(tmp_path / "copy")}
     task = manager.start_save_as(params)
@@ -440,7 +451,7 @@ def test_schema_four_migration_preserves_registry_json_history_and_bytes(tmp_pat
         raw_json = connection.execute("SELECT dataset_json FROM datasets").fetchall()
     original_bytes = {d["relativePath"]: (path.parent / d["relativePath"]).read_bytes() for d in original_workspace["datasets"]}
     reopened = projects.open({"path": str(path)})
-    assert reopened["schemaVersion"] == 6
+    assert reopened["schemaVersion"] == 7
     assert workspace.get({"path": str(path)}) == original_workspace
     with sqlite3.connect(path) as connection:
         assert connection.execute("SELECT dataset_json FROM datasets").fetchall() == raw_json

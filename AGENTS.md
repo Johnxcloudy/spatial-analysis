@@ -4,6 +4,18 @@ Windows-first personal GIS workstation for land-use overlay and area statistics.
 
 ## Current Scope
 
+User authorized the next development step and Git submission on2026-09-10.
+Phase4A1 / CART-01A is in progress: app0.7.0, public protocol/schema7, vector-style
+spec1; worker5/readiness1 unchanged. Read docs/phase-4a1.md and its implementation
+plan before changes. This stage delivers manual vector presets/typed categories/
+legend persistence, not complete CART-01, Layout, formal export or Agent features.
+Backend owns cartography.py/projects.py/workspace.py and its tests; frontend owns
+vector-style/VectorStyleEditor/VectorLegend/LayerPanel/VectorMap/styles/tests;
+acceptance owns scripts/verify-cartography.py. Root owns contracts, other version
+updates, use-workspace, native harness, CI/docs and integration. Coordinate changes.
+
+### Delivered Phase3B
+
 Phase3B / 0.6.2 implementation and local source/frozen/native/install acceptance are
 complete; both current functional Windows CI runs passed. Read docs/phase-3b.md,
 docs/verification-phase-3b.md and the current execution handoff before selecting work.

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type SetStateAction } from 'react';
-import { PROTOCOL_VERSION, type AnalysisOptions, type Dataset, type EngineError, type MapLayer, type ProbeReport, type Project, type RuntimeInfo, type SourceInspection, type TableOptions, type Task, type ViewState, type Workspace } from '../../../shared/contracts';
+import { PROTOCOL_VERSION, type AnalysisOptions, type Dataset, type EngineError, type LayerChanges, type ProbeReport, type Project, type RuntimeInfo, type SourceInspection, type TableOptions, type Task, type ViewState, type Workspace } from '../../../shared/contracts';
 import { normalizeError, type DesktopBridge } from './bridge';
 import { draftFromProject, hasUnsavedChanges, validateDirectoryName, type ProjectDraft } from './project-state';
 
@@ -462,7 +462,7 @@ export function useWorkspace(bridge: DesktopBridge) {
     await loadWorkspace(current, generation.current);
   }, true);
 
-  const updateLayer = (layerId: string, changes: Partial<Pick<MapLayer, 'name' | 'visible' | 'opacity' | 'color' | 'categoryField' | 'categoryColors' | 'rasterStyle'>>) => run('保存图层设置', async () => {
+  const updateLayer = (layerId: string, changes: LayerChanges) => run('保存图层设置', async () => {
     const current = activeProject();
     const next = await bridge.request('layer.update', { path: current.projectPath, layerId, changes });
     setWorkspace((value) => value ? { ...value, layers: value.layers.map((layer) => layer.id === layerId ? next : layer) } : value);
