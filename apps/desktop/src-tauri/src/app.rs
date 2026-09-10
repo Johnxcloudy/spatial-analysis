@@ -41,7 +41,7 @@ async fn engine_request(
 async fn smoke_test(app: &AppHandle, directory: &std::path::Path) -> Result<Value, EngineError> {
     let engine = app.state::<EngineManager>();
     let runtime = engine.request(app, "runtime.info", json!({})).await?;
-    if runtime["protocolVersion"] != 4 || runtime["engineVersion"] != "0.4.0" {
+    if runtime["protocolVersion"] != 5 || runtime["engineVersion"] != "0.5.0" {
         return Err(EngineError::local(
             "SMOKE_VERSION_MISMATCH",
             runtime.to_string(),
@@ -52,12 +52,12 @@ async fn smoke_test(app: &AppHandle, directory: &std::path::Path) -> Result<Valu
         .request(
             app,
             "project.create",
-            json!({"directory":project_directory,"name":"Phase 1C 本地验证"}),
+            json!({"directory":project_directory,"name":"Phase 1D 本地验证"}),
         )
         .await?;
     let path = created["projectPath"].clone();
     let saved = engine.request(app, "project.save", json!({
-        "path":path,"name":"Phase 1C 本地验证","description":"Native bridge saved successfully",
+        "path":path,"name":"Phase 1D 本地验证","description":"Native bridge saved successfully",
         "analysisCrs":"EPSG:4547","displayCrs":created["displayCrs"],"viewState":created["viewState"]
     })).await?;
     engine.request(app, "project.close", json!({})).await?;
@@ -320,20 +320,136 @@ async fn smoke_test(app: &AppHandle, directory: &std::path::Path) -> Result<Valu
     let restored = engine
         .request(app, "workspace.get", json!({"path":path}))
         .await?;
-    engine.request(app, "project.close", json!({})).await?;
     if restored["datasets"] != workspace["datasets"] || restored["layers"] != workspace["layers"] {
         return Err(EngineError::local(
             "SMOKE_WORKSPACE_MISMATCH",
             restored.to_string(),
         ));
     }
+    let moved_sources = directory.join("relocated-source");
+    std::fs::create_dir(&moved_sources)
+        .map_err(|error| EngineError::local("SMOKE_RELOCATION", error.to_string()))?;
+    let moved_table = moved_sources.join("coordinates.csv");
+    std::fs::rename(&table_source, &moved_table)
+        .map_err(|error| EngineError::local("SMOKE_RELOCATION", error.to_string()))?;
+    let missing_source = engine
+        .request(
+            app,
+            "source.status",
+            json!({"path":path,"datasetId":table_task["datasetId"]}),
+        )
+        .await?;
+    if missing_source["availability"] != "missing" {
+        return Err(EngineError::local(
+            "SMOKE_SOURCE_STATUS",
+            missing_source.to_string(),
+        ));
+    }
+    let relocation_task = engine
+        .request(
+            app,
+            "source.relocate",
+            json!({
+                "path":path,"datasetId":table_task["datasetId"],"sourcePath":moved_table
+            }),
+        )
+        .await?;
+    let relocation_task = wait_for_task(app, &engine, &path, relocation_task).await?;
+    let source_location = engine
+        .request(
+            app,
+            "source.status",
+            json!({"path":path,"datasetId":table_task["datasetId"]}),
+        )
+        .await?;
+    if source_location["availability"] != "present"
+        || source_location["relocated"] != true
+        || source_location["verifiedAt"].is_null()
+    {
+        return Err(EngineError::local(
+            "SMOKE_SOURCE_STATUS",
+            source_location.to_string(),
+        ));
+    }
+    let copy_directory = directory.join("copied-project");
+    let copy_task = engine.request(app, "project.saveAs", json!({
+        "path":path,"directory":copy_directory,"name":"Native project copy",
+        "description":"Unsaved form copied without saving original", "analysisCrs":"EPSG:4547",
+        "displayCrs":saved["displayCrs"],"viewState":saved["viewState"]
+    })).await?;
+    let copy_task = wait_for_task(app, &engine, &path, copy_task).await?;
+    let copied = engine
+        .request(
+            app,
+            "project.open",
+            json!({"path":copy_task["destination"]}),
+        )
+        .await?;
+    let copied_workspace = engine
+        .request(app, "workspace.get", json!({"path":copied["projectPath"]}))
+        .await?;
+    if copied["id"] == created["id"]
+        || copied["schemaVersion"] != 5
+        || copied["description"] != "Unsaved form copied without saving original"
+        || copied_workspace["datasets"] != restored["datasets"]
+        || copied_workspace["layers"] != restored["layers"]
+    {
+        return Err(EngineError::local(
+            "SMOKE_COPY_MISMATCH",
+            copied_workspace.to_string(),
+        ));
+    }
+    for copied_dataset in copied_workspace["datasets"].as_array().unwrap() {
+        let relative = copied_dataset["relativePath"]
+            .as_str()
+            .ok_or_else(|| EngineError::local("SMOKE_COPY_PATH", copied_dataset.to_string()))?;
+        let original_bytes = std::fs::read(project_directory.join(relative))
+            .map_err(|error| EngineError::local("SMOKE_COPY_BYTES", error.to_string()))?;
+        let copied_bytes = std::fs::read(copy_directory.join(relative))
+            .map_err(|error| EngineError::local("SMOKE_COPY_BYTES", error.to_string()))?;
+        if original_bytes != copied_bytes {
+            return Err(EngineError::local("SMOKE_COPY_BYTES", relative));
+        }
+    }
+    let copied_parent = engine
+        .request(
+            app,
+            "source.status",
+            json!({
+                "path":copied["projectPath"],"datasetId":point_task["datasetId"]
+            }),
+        )
+        .await?;
+    if copied_parent["availability"] != "internal"
+        || !copied_parent["resolvedPath"]
+            .as_str()
+            .is_some_and(|value| std::path::Path::new(value).starts_with(&copy_directory))
+    {
+        return Err(EngineError::local(
+            "SMOKE_COPY_PARENT",
+            copied_parent.to_string(),
+        ));
+    }
+    let original_after_copy = engine
+        .request(app, "project.open", json!({"path":path}))
+        .await?;
+    if original_after_copy["name"] != saved["name"]
+        || original_after_copy["description"] != saved["description"]
+    {
+        return Err(EngineError::local(
+            "SMOKE_ORIGINAL_CHANGED",
+            original_after_copy.to_string(),
+        ));
+    }
+    engine.request(app, "project.close", json!({})).await?;
     Ok(
         json!({"ok":true,"runtime":runtime,"created":created,"reopened":reopened,"diagnostics":report,
             "source":source,"workspace":restored,"attributes":attributes,"viewport":viewport,"exported":exported,
             "tableSource":table_source_info,"tablePage":table_page,"pointPage":point_page,
             "pointViewport":point_view,"tableExport":table_export,"rasterSource":raster_source,
             "rasterSample":raster_sample,"rasterRender":{"width":raster_image["width"],"height":raster_image["height"],"mimeType":raster_image["mimeType"]},
-            "rasterExport":raster_export}),
+            "rasterExport":raster_export,"sourceLocation":source_location,"relocationTask":relocation_task,
+            "copyTask":copy_task,"copiedProject":copied,"copiedParent":copied_parent}),
     )
 }
 

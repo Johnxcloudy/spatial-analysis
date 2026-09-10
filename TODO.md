@@ -61,10 +61,22 @@
 [Windows CI 34335919203](https://github.com/Johnxcloudy/spatial-analysis/actions/runs/34335919203)
 为 success，安装器、原生冒烟及上传通过。阶段文档使用 `[skip ci]` 收尾。
 
+## Phase 1D（进行中）
+
+- [x] 用户于 2026-09-10 授权进入下一步，确定 [范围](docs/phase-1d.md) 和 [实施计划](docs/superpowers/plans/2026-09-10-phase-1d.md)。
+- [x] 项目另存为、来源状态/重新定位与 schema 1-4 迁移。
+- [x] 桌面工作流、跨格式整合及失败/取消/恢复验证。
+- [x] CART-00 配置草案与渲染路径小样，源码/独立冻结/PDF/浏览器像素验证见 [探针证据](docs/verification-cartography-probe.md)。
+- [x] 契约与版本整合、独立复核、回归测试和构建；源码/冻结引擎工作流及原生验收。
+- [x] 完成 NSIS 安装包构建、本机临时安装、安装后 EXE 验证与卸载。
+- [ ] Git 提交/推送、对应 Windows CI 核查及阶段总结/精简交接收尾。
+
+阶段仍在进行中：功能、源码/冻结/原生、安装包与本机安装/卸载验收已完成，Git/CI 交付待完成；不将本机结果提前计入远程 CI。
+
 ## 后续阶段
 
 - Phase 1C：已完成，见 [实施计划](docs/superpowers/plans/2026-09-09-phase-1c.md) 与 [范围约束](docs/phase-1c.md)。
-- Phase 1D：项目另存/重新定位与跨格式工作区回归。
+- Phase 1D：项目另存/重新定位、跨格式回归与本机分发已完成，当前继续 Git/CI 交付收尾。
 - Phase 2：正式土地叠加、分类面积与成果导出。
 - Phase 3：完整任务取消、恢复、大样本性能和发布稳定性。
 - Phase 4A：土地利用成果制图，主题/图例/比例尺、Layout、PNG/PDF。
@@ -74,7 +86,7 @@
 
 ## 制图任务跟踪
 
-- [ ] CART-00：Phase 1D 制图契约与渲染选型探针；Phase 1C 保留后续地形所需的单位/掩膜元数据。
+- [x] CART-00：Phase 1D 制图配置草案与渲染选型探针；结果见 [实测证据](docs/verification-cartography-probe.md)，尚未交付 Layout 或正式制图导出。
 - [ ] CART-01：Planning/Publication 主题、明确语义的分类/分级、NoData、基本标注。
 - [ ] CART-02：可保存的 Layout、真实比例尺/方向、完整数据 PNG/PDF 导出。
 - [ ] CART-03：可追溯 Hillshade/高程着色/等高线，栅格拉伸/分类与受控影像混合。
@@ -82,4 +94,4 @@
 - [ ] CART-05：高级标签/坐标网、出版参数、TIFF/SVG/PDF 能力与字体验收。
 - [ ] CART-06：Agent 配置建议、校验、预览、采纳、撤销及离线回退。
 
-详细依赖和验收标准见 [制图与成果输出路线图](docs/cartography-roadmap.md)。新增内容为后续任务，Phase 1A 已交付；仍先完成数据基础、用地分析与稳定性。合成样本与本机安装测试不能替代真实数据和独立环境验收。
+详细依赖和验收标准见 [制图与成果输出路线图](docs/cartography-roadmap.md)。CART-00 实验已完成，CART-01 至 CART-06 仍为后续任务；主线继续完成数据基础交付、用地分析与稳定性。合成样本与本机安装测试不能替代真实数据和独立环境验收。

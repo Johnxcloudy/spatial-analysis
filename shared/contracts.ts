@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 4 as const;
+export const PROTOCOL_VERSION = 5 as const;
 
 export interface ViewState {
   center: [number, number];
@@ -11,7 +11,7 @@ export interface Project {
   description: string;
   createdAt: string;
   updatedAt: string;
-  schemaVersion: 4;
+  schemaVersion: 5;
   projectPath: string;
   analysisCrs: string | null;
   displayCrs: string;
@@ -19,7 +19,7 @@ export interface Project {
 }
 
 export interface RuntimeInfo {
-  protocolVersion: 4;
+  protocolVersion: 5;
   engineVersion: string;
   pythonVersion: string;
   packaged: boolean;
@@ -71,9 +71,12 @@ export type EngineMethod =
   | "project.create"
   | "project.open"
   | "project.save"
+  | "project.saveAs"
   | "project.close"
   | "diagnostics.run"
   | "source.inspect"
+  | "source.status"
+  | "source.relocate"
   | "workspace.get"
   | "vector.import"
   | "vector.export"
@@ -295,7 +298,7 @@ export interface MapLayer {
 
 export interface Task {
   id: string;
-  kind: "import" | "export" | "points";
+  kind: "import" | "export" | "points" | "save_as" | "relocate";
   status: "running" | "completed" | "failed" | "cancelled" | "interrupted";
   stage: string;
   completed: number | null;
@@ -312,6 +315,15 @@ export interface Workspace {
   datasets: Dataset[];
   layers: MapLayer[];
   tasks: Task[];
+}
+
+export interface SourceStatus {
+  datasetId: string;
+  originalPath: string;
+  resolvedPath: string;
+  availability: "present" | "missing" | "internal" | "unavailable";
+  relocated: boolean;
+  verifiedAt: string | null;
 }
 
 export interface AttributeFilter {

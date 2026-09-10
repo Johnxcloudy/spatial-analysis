@@ -32,13 +32,14 @@ function geographicBounds(map: Map): Bounds | null {
   return result.every(Number.isFinite) && result[0] < result[2] && result[1] < result[3] ? result : null;
 }
 
-export function VectorMap({ bridge, path, layers, datasets, initialView, enabled, selected, fitRequest, onSelect, onSelectPixel, onViewChange, onFailure }: {
+export function VectorMap({ bridge, path, layers, datasets, initialView, enabled, locked = false, selected, fitRequest, onSelect, onSelectPixel, onViewChange, onFailure }: {
   bridge: DesktopBridge;
   path?: string;
   layers: MapLayer[];
   datasets: (VectorDataset | RasterDataset)[];
   initialView: ViewState;
   enabled: boolean;
+  locked?: boolean;
   selected: FeatureResult | null;
   fitRequest: FitRequest | null;
   onSelect: (layerId: string, featureId: string) => void;
@@ -112,6 +113,13 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
     resize();
     return () => { observer.disconnect(); for (const queue of rasterQueues.current.values()) queue.dispose(); rasterQueues.current.clear(); map.dispose(); instance.current = null; highlight.current = null; mapLayers.current.clear(); };
   }, []);
+
+  useEffect(() => {
+    const map = instance.current;
+    if (!map) return;
+    if (locked) map.getView().cancelAnimations();
+    map.getInteractions().forEach((interaction) => interaction.setActive(!locked));
+  }, [locked]);
 
   useEffect(() => {
     const map = instance.current;
@@ -221,7 +229,7 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
   }, [selected]);
 
   useEffect(() => {
-    if (!fitRequest || !instance.current) return;
+    if (locked || !fitRequest || !instance.current) return;
     const [west, south, east, north] = fitRequest.bounds;
     if (![west, south, east, north].every(Number.isFinite)) return;
     const extent = transformExtent([west, Math.max(south, -85.05112878), east, Math.min(north, 85.05112878)], 'EPSG:4326', 'EPSG:3857');
@@ -232,7 +240,7 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
   return <div className="vector-map" data-testid="vector-map">
     <div className="map-target" ref={target} tabIndex={0} aria-label="地图" />
     {!visible.length && <div className="map-empty"><Crosshair size={30} strokeWidth={1.3} /><span>{layers.length ? '没有可显示的图层' : '未添加图层'}</span></div>}
-    <div className="map-controls"><button className="icon-button" aria-label="地图放大" title="地图放大" onClick={() => zoom(1)}><Plus size={18} /></button><button className="icon-button" aria-label="地图缩小" title="地图缩小" onClick={() => zoom(-1)}><Minus size={18} /></button></div>
+    <div className="map-controls"><button className="icon-button" aria-label="地图放大" title="地图放大" disabled={locked} onClick={() => zoom(1)}><Plus size={18} /></button><button className="icon-button" aria-label="地图缩小" title="地图缩小" disabled={locked} onClick={() => zoom(-1)}><Minus size={18} /></button></div>
     {(loading || !!rasterBusy.size) && <span className="map-loading" role="status">读取显示数据</span>}
     {!!(issues.length + Object.keys(rasterIssues).length) && <div className="map-notices" role="status"><AlertTriangle size={15} /><div>{[...issues, ...Object.values(rasterIssues)].map((issue) => <p key={issue}>{issue}</p>)}</div></div>}
     <div className="map-coordinate">{coordinate || '显示 CRS：EPSG:3857'}</div>

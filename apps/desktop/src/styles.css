@@ -35,7 +35,7 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: #929c97; flex-shrink: 0; }
 .status-dot.online { background: #158359; }
 .toolbar { display: flex; align-items: center; justify-content: space-between; padding: 8px 20px; gap: 12px; background: #fcfdfc; border-bottom: 1px solid #dfe5e1; min-height: 52px; }
-.toolbar-group { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.toolbar-group { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; min-width: 0; }
 .toolbar-divider { height: 20px; width: 1px; background: #e0e5e2; margin: 0 5px; }
 .toolbar-context { color: #849088; font-size: 11px; white-space: nowrap; }
 .button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 6px 12px; border: 1px solid #d8dfda; background: #fff; border-radius: 5px; font-size: 12px; font-weight: 500; white-space: nowrap; }
@@ -377,6 +377,13 @@ input[type="color"] { width: 31px; height: 28px; padding: 2px; background: #fff;
 .table-import-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }
 .table-import-options .field { min-width: 0; margin-bottom: 14px; }
 .table-sheet-field { grid-column: 1 / -1; }
+.source-location { padding: 12px 16px; border-bottom: 1px solid #dfe6e1; font-size: 12px; min-width: 0; }
+.source-location .section-heading { margin: 0 0 6px; }
+.source-location h3 { margin: 0; font-size: 12px; font-weight: 600; }
+.source-location .section-heading > div { display: flex; }
+.source-location .stacked-metadata { margin: 0; }
+.source-location .inline-error { overflow-wrap: anywhere; }
+.save-as-metadata { margin: 0 0 20px; }
 .format-value { min-height: 34px; display: flex; align-items: center; color: #637168; font-size: 12px; font-weight: 500; }
 .import-data-policy { color: #7c8a81; font-size: 11px; line-height: 1.65; margin: 4px 0 14px; }
 .table-preview { border: 1px solid #dfe6e1; }

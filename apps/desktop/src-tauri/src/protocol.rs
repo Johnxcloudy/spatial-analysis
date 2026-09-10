@@ -30,9 +30,12 @@ pub fn validate_request(method: &str, params: &Value) -> Result<(), EngineError>
             | "project.create"
             | "project.open"
             | "project.save"
+            | "project.saveAs"
             | "project.close"
             | "diagnostics.run"
             | "source.inspect"
+            | "source.status"
+            | "source.relocate"
             | "workspace.get"
             | "vector.import"
             | "vector.export"
@@ -133,6 +136,13 @@ mod tests {
             "raster.render",
             "raster.sample",
         ] {
+            assert!(validate_request(method, &json!({})).is_ok(), "{method}");
+        }
+    }
+
+    #[test]
+    fn accepts_portability_workflow_methods() {
+        for method in ["project.saveAs", "source.status", "source.relocate"] {
             assert!(validate_request(method, &json!({})).is_ok(), "{method}");
         }
     }

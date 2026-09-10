@@ -564,7 +564,7 @@ def test_task_cancel_reaps_a_real_child_process(tmp_path: Path) -> None:
     projects.close()
 
 
-def test_table_and_points_tasks_write_private_protocol_three_requests(tmp_path: Path) -> None:
+def test_table_and_points_tasks_write_private_protocol_four_requests(tmp_path: Path) -> None:
     projects, project, workspace = _stores(tmp_path)
 
     def command(request_path: Path) -> list[str]:
@@ -587,7 +587,7 @@ def test_table_and_points_tasks_write_private_protocol_three_requests(tmp_path: 
         (Path(project["projectPath"]).parent / "staging" / "tasks" / imported["id"] / "request.json").read_text()
     )
     assert imported["kind"] == "import"
-    assert import_request["protocolVersion"] == 3
+    assert import_request["protocolVersion"] == 4
     assert import_request["kind"] == "table_import"
     assert import_request["payload"]["datasetId"] == imported["datasetId"]
     manager.cancel({"path": project["projectPath"], "taskId": imported["id"]})
@@ -607,7 +607,7 @@ def test_table_and_points_tasks_write_private_protocol_three_requests(tmp_path: 
         (Path(project["projectPath"]).parent / "staging" / "tasks" / points["id"] / "request.json").read_text()
     )
     assert points["kind"] == "points"
-    assert points_request["protocolVersion"] == 3
+    assert points_request["protocolVersion"] == 4
     assert points_request["kind"] == "points"
     assert points_request["payload"]["dataset"]["id"] == table["id"]
     assert points_request["payload"]["datasetId"] == points["datasetId"]
@@ -615,7 +615,7 @@ def test_table_and_points_tasks_write_private_protocol_three_requests(tmp_path: 
     projects.close()
 
 
-def test_raster_tasks_write_protocol_three_requests_and_enforce_extensions(tmp_path: Path) -> None:
+def test_raster_tasks_write_protocol_four_requests_and_enforce_extensions(tmp_path: Path) -> None:
     projects, project, workspace = _stores(tmp_path)
 
     def command(request_path: Path) -> list[str]:
@@ -634,7 +634,7 @@ def test_raster_tasks_write_protocol_three_requests_and_enforce_extensions(tmp_p
     import_work_dir = Path(project["projectPath"]).parent / "staging" / "tasks" / imported["id"]
     import_request = json.loads((import_work_dir / "request.json").read_text(encoding="utf-8"))
     assert imported["kind"] == "import"
-    assert import_request["protocolVersion"] == 3
+    assert import_request["protocolVersion"] == 4
     assert import_request["kind"] == "raster_import"
     assert import_request["payload"] == {
         "sourcePath": str(source.resolve()), "datasetId": imported["datasetId"]
@@ -654,7 +654,7 @@ def test_raster_tasks_write_protocol_three_requests_and_enforce_extensions(tmp_p
     export_request = json.loads(
         (Path(project["projectPath"]).parent / "staging" / "tasks" / exported["id"] / "request.json").read_text()
     )
-    assert export_request["protocolVersion"] == 3
+    assert export_request["protocolVersion"] == 4
     assert export_request["kind"] == "raster_export"
     assert export_request["payload"]["dataset"] == raster
     assert export_request["payload"]["managedPath"].endswith(f"rasters\\{raster['id']}.tif")
@@ -835,7 +835,7 @@ def test_worker_does_not_delete_colliding_export_pending_file(tmp_path: Path, mo
     request.write_text(
         json.dumps(
             {
-                "protocolVersion": 3,
+                "protocolVersion": 4,
                 "taskId": task_id,
                 "kind": "export",
                 "payload": {},
@@ -880,7 +880,7 @@ def test_worker_retries_transient_windows_progress_replace(tmp_path: Path, monke
     request.write_text(
         json.dumps(
             {
-                "protocolVersion": 3,
+                "protocolVersion": 4,
                 "taskId": task_id,
                 "kind": "import",
                 "payload": {},
@@ -923,7 +923,7 @@ def test_worker_dispatches_raster_operations_with_exact_artifacts(tmp_path: Path
     import_request = import_dir / "request.json"
     import_payload = {"sourcePath": str(tmp_path / "source.tif"), "datasetId": str(uuid.uuid4())}
     import_request.write_text(json.dumps({
-        "protocolVersion": 3, "taskId": import_id, "kind": "raster_import", "payload": import_payload,
+        "protocolVersion": 4, "taskId": import_id, "kind": "raster_import", "payload": import_payload,
         "workDir": str(import_dir), "publishPath": None,
     }), encoding="utf-8")
     assert run_worker(import_request) == 0
@@ -938,7 +938,7 @@ def test_worker_dispatches_raster_operations_with_exact_artifacts(tmp_path: Path
     export_payload = {"dataset": _raster_dataset(), "managedPath": str(tmp_path / "managed.tif")}
     pending = tmp_path / f".out.tif.{export_id}.pending"
     export_request.write_text(json.dumps({
-        "protocolVersion": 3, "taskId": export_id, "kind": "raster_export", "payload": export_payload,
+        "protocolVersion": 4, "taskId": export_id, "kind": "raster_export", "payload": export_payload,
         "workDir": str(export_dir), "publishPath": str(pending),
     }), encoding="utf-8")
     assert run_worker(export_request) == 0

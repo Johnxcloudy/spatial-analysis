@@ -23,7 +23,7 @@ from .validation import (
 )
 
 APPLICATION_ID = 0x53504131
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 PROJECT_IDENTITY = "spatial-analysis-desktop-project"
 PROJECT_FILENAME = "project.spa"
 OWNED_DIRECTORIES = ("datasets", "rasters", "results", "staging", "cache", "backups")
@@ -65,7 +65,9 @@ def _row_to_project(row: sqlite3.Row, path: Path, schema_version: int) -> dict[s
     }
 
 
-def _read_project(path: Path, *, accepted_versions: frozenset[int] | None = None) -> dict[str, Any]:
+def _read_project(path: Path, *, accepted_versions: frozenset[int] | None = None, allow_copy_pending: bool = False) -> dict[str, Any]:
+    if not allow_copy_pending and (path.parent / ".spa-copy-pending.json").exists():
+        raise DomainError("Project copy publication is incomplete", kind="copy_pending", detail=str(path))
     if not path.is_file():
         raise DomainError("Project file does not exist", kind="project_not_found", detail=str(path))
     connection: sqlite3.Connection | None = None
@@ -87,8 +89,10 @@ def _read_project(path: Path, *, accepted_versions: frozenset[int] | None = None
             _validate_v2_schema(connection)
         elif schema_version == 3:
             _validate_v3_schema(connection)
-        elif schema_version == SCHEMA_VERSION:
+        elif schema_version == 4:
             _validate_v4_schema(connection)
+        elif schema_version == SCHEMA_VERSION:
+            _validate_v5_schema(connection)
         row = connection.execute(
             "SELECT identity, project_id, name, description, created_at, updated_at, "
             "analysis_crs, display_crs, view_state FROM project_metadata WHERE singleton = 1"
@@ -334,6 +338,54 @@ def _validate_v4_schema(connection: sqlite3.Connection) -> None:
         raise sqlite3.DatabaseError("project task kinds are incompatible")
 
 
+def _create_v5_schema(connection: sqlite3.Connection) -> None:
+    _create_v4_schema(connection)
+    task_sql = connection.execute("SELECT sql FROM sqlite_master WHERE name = 'tasks'").fetchone()[0]
+    if "'save_as'" not in task_sql or "'relocate'" not in task_sql:
+        connection.execute(
+            "CREATE TABLE tasks_v5 ("
+            "task_id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('import', 'export', 'points', 'save_as', 'relocate')), "
+            "status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed', 'cancelled', 'interrupted')), "
+            "stage TEXT NOT NULL, completed INTEGER, total INTEGER, created_at TEXT NOT NULL, "
+            "updated_at TEXT NOT NULL, dataset_id TEXT, destination TEXT, error TEXT)"
+        )
+        connection.execute("INSERT INTO tasks_v5 SELECT * FROM tasks")
+        connection.execute("DROP TABLE tasks")
+        connection.execute("ALTER TABLE tasks_v5 RENAME TO tasks")
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS source_locations ("
+        "location_id INTEGER PRIMARY KEY, dataset_id TEXT NOT NULL REFERENCES datasets(dataset_id), "
+        "source_path TEXT NOT NULL, fingerprint TEXT NOT NULL, verified_at TEXT NOT NULL, "
+        "task_id TEXT NOT NULL UNIQUE REFERENCES tasks(task_id))"
+    )
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS pending_copies ("
+        "task_id TEXT PRIMARY KEY REFERENCES tasks(task_id), temporary_path TEXT NOT NULL, "
+        "destination_path TEXT NOT NULL, project_id TEXT NOT NULL, plan_json TEXT NOT NULL, manifest_json TEXT)"
+    )
+    for action in ("update", "delete"):
+        connection.execute(
+            f"CREATE TRIGGER IF NOT EXISTS source_locations_no_{action} BEFORE {action.upper()} ON source_locations "
+            "BEGIN SELECT RAISE(ABORT, 'source location history is immutable'); END"
+        )
+
+
+def _validate_v5_schema(connection: sqlite3.Connection) -> None:
+    _validate_v4_schema(connection)
+    for table, expected in {
+        "source_locations": {"location_id", "dataset_id", "source_path", "fingerprint", "verified_at", "task_id"},
+        "pending_copies": {"task_id", "temporary_path", "destination_path", "project_id", "plan_json", "manifest_json"},
+    }.items():
+        if {row[1] for row in connection.execute(f"PRAGMA table_info({table})")} != expected:
+            raise sqlite3.DatabaseError(f"project table {table} has an incompatible schema")
+    task_sql = connection.execute("SELECT sql FROM sqlite_master WHERE name = 'tasks'").fetchone()[0]
+    if "'save_as'" not in task_sql or "'relocate'" not in task_sql:
+        raise sqlite3.DatabaseError("project task kinds are incompatible")
+    triggers = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'")}
+    if not {"source_locations_no_update", "source_locations_no_delete"} <= triggers:
+        raise sqlite3.DatabaseError("source history immutability triggers are missing")
+
+
 def _backup_project(path: Path, source_version: int) -> Path:
     backup_directory = path.parent / "backups"
     backup_directory.mkdir(parents=True, exist_ok=True)
@@ -369,7 +421,7 @@ def _backup_project(path: Path, source_version: int) -> Path:
     return backup_path
 
 
-def _migrate_to_v4(path: Path, source_version: int) -> None:
+def _migrate_to_current(path: Path, source_version: int) -> None:
     connection = sqlite3.connect(path, timeout=10.0)
     try:
         connection.execute("PRAGMA foreign_keys = OFF")
@@ -399,9 +451,10 @@ def _migrate_to_v4(path: Path, source_version: int) -> None:
         elif source_version == 3:
             connection.execute("ALTER TABLE map_layers ADD COLUMN raster_style TEXT")
             _create_v4_schema(connection)
-        else:
+        elif source_version != 4:
             raise sqlite3.DatabaseError(f"cannot migrate schema version {source_version}")
-        _validate_v4_schema(connection)
+        _create_v5_schema(connection)
+        _validate_v5_schema(connection)
         violations = connection.execute("PRAGMA foreign_key_check").fetchall()
         if violations:
             raise sqlite3.DatabaseError("project contains invalid foreign key references")
@@ -497,8 +550,8 @@ class ProjectStore:
                             json.dumps({"center": [114.0, 27.1], "zoom": 5.0}, separators=(",", ":")),
                         ),
                     )
-                    _create_v4_schema(connection)
-                    _validate_v4_schema(connection)
+                    _create_v5_schema(connection)
+                    _validate_v5_schema(connection)
                     connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                     connection.commit()
                 except Exception:
@@ -539,25 +592,25 @@ class ProjectStore:
         require_exact_keys(params, {"path"})
         path = require_path(params["path"], "path")
         if self._session and _same_path(path, self._session.path):
-            current = _read_project(path, accepted_versions=frozenset({1, 2, 3, SCHEMA_VERSION}))
+            current = _read_project(path, accepted_versions=frozenset({1, 2, 3, 4, SCHEMA_VERSION}))
             if current["schemaVersion"] < SCHEMA_VERSION:
                 try:
                     source_version = current["schemaVersion"]
                     _backup_project(path, source_version)
-                    _migrate_to_v4(path, source_version)
+                    _migrate_to_current(path, source_version)
                 except (DomainError, sqlite3.DatabaseError, OSError) as exc:
                     raise DomainError(
                         "Could not migrate project", kind="project_migration_failed", detail=str(exc)
                     ) from exc
             return _read_project(path)
-        _read_project(path, accepted_versions=frozenset({1, 2, 3, SCHEMA_VERSION}))
+        _read_project(path, accepted_versions=frozenset({1, 2, 3, 4, SCHEMA_VERSION}))
         session = _acquire_lock(path)
         try:
-            candidate = _read_project(path, accepted_versions=frozenset({1, 2, 3, SCHEMA_VERSION}))
+            candidate = _read_project(path, accepted_versions=frozenset({1, 2, 3, 4, SCHEMA_VERSION}))
             if candidate["schemaVersion"] < SCHEMA_VERSION:
                 source_version = candidate["schemaVersion"]
                 _backup_project(path, source_version)
-                _migrate_to_v4(path, source_version)
+                _migrate_to_current(path, source_version)
             project = _read_project(path)
         except (sqlite3.DatabaseError, OSError) as exc:
             session.close()

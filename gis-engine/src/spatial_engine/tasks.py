@@ -71,6 +71,42 @@ class TaskManager:
         self._operation: str | None = None
         self._stderr_handle: Any = None
 
+    def require_mutation_allowed(self) -> None:
+        self.harvest()
+        if self._operation == "save_as":
+            raise DomainError("Project copy is running", kind="task_busy")
+
+    def start_save_as(self, params: dict[str, Any]) -> dict[str, Any]:
+        from . import portability
+        require_exact_keys(params, {"path", "directory", "name", "description", "analysisCrs", "displayCrs", "viewState"})
+        source = self.projects.active_path(params["path"])
+        self.workspace.recover()
+        self.harvest()
+        self._require_idle()
+        options = portability.validate_save_as(params, source)
+        task_id = str(uuid.uuid4())
+        payload = portability.prepare_copy(self.workspace, task_id, str(uuid.uuid4()), options)
+        try:
+            self._start(task_id, "save_as", payload, publish_path=None)
+        except Exception:
+            portability.abandon_copy(self.workspace, task_id)
+            raise
+        return self.workspace.task(task_id)
+
+    def start_relocation(self, params: dict[str, Any]) -> dict[str, Any]:
+        from . import portability
+        require_exact_keys(params, {"path", "datasetId", "sourcePath"})
+        self.projects.active_path(params["path"])
+        self.workspace.recover()
+        self.harvest()
+        self._require_idle()
+        dataset = self.workspace.dataset(params["path"], params["datasetId"])
+        source = portability.relocation_candidate(dataset, params["sourcePath"])
+        task_id = str(uuid.uuid4())
+        task = self.workspace.create_task("relocate", task_id=task_id, dataset_id=dataset["id"], destination=str(source))
+        self._start(task_id, "relocate", {"dataset": dataset, "sourcePath": str(source)}, publish_path=None)
+        return task
+
     def start_import(self, params: dict[str, Any]) -> dict[str, Any]:
         require_exact_keys(params, {"path", "sourcePath", "sourceLayer", "encoding", "assignedCrs"})
         self.projects.active_path(params["path"])
@@ -246,6 +282,9 @@ class TaskManager:
                 self._process.wait()
             self._clear_process()
         self.workspace.discard_pending(task_id)
+        if task["kind"] == "save_as":
+            from .portability import abandon_copy
+            abandon_copy(self.workspace, task_id)
         self._cleanup_export_pending(task)
         if work_dir is not None:
             self._cleanup_work_dir(work_dir)
@@ -280,13 +319,23 @@ class TaskManager:
                 detail = error.get("detail")
                 error_text = message if not isinstance(detail, str) or not detail else f"{message}: {detail}"
                 self.workspace.update_task(task_id, status=status, stage=status, error=error_text[:8192])
+                if self.workspace.task(task_id)["kind"] == "save_as":
+                    from .portability import abandon_copy
+                    abandon_copy(self.workspace, task_id)
                 self._cleanup_work_dir(work_dir)
                 return
             if return_code != 0:
                 raise DomainError("Worker exited unsuccessfully", kind="worker_failed", detail=str(return_code))
             payload = result["result"]
             task = self.workspace.task(task_id)
-            if task["kind"] != "export":
+            if task["kind"] == "save_as":
+                from .portability import prepare_copy_publication, complete_copy_publication
+                prepare_copy_publication(self.workspace, task_id, payload)
+                complete_copy_publication(self.workspace, task_id)
+            elif task["kind"] == "relocate":
+                from .portability import complete_relocation
+                complete_relocation(self.workspace, task_id, payload)
+            elif task["kind"] != "export":
                 self._complete_import(task_id, work_dir, payload, operation)
             else:
                 self._complete_export(task_id, work_dir, payload, task, operation)
@@ -323,7 +372,7 @@ class TaskManager:
             work_dir.mkdir(parents=True, exist_ok=False)
             request_path = work_dir / "request.json"
             _atomic_json(request_path, {
-                "protocolVersion": 3, "taskId": task_id, "kind": kind,
+                "protocolVersion": 4, "taskId": task_id, "kind": kind,
                 "payload": payload, "workDir": str(work_dir.resolve()),
                 "publishPath": str(publish_path.resolve()) if publish_path is not None else None,
             })

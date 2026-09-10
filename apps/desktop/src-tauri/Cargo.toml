@@ -1,6 +1,6 @@
 [package]
 name = "spatial-analysis-desktop"
-version = "0.4.0"
+version = "0.5.0"
 description = "Local spatial analysis desktop foundation"
 authors = ["Spatial Analysis contributors"]
 edition = "2021"

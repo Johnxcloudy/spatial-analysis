@@ -1,16 +1,16 @@
-# Phase 1C 架构
+# Phase 1D 架构
 
-React 调用受限的 Tauri engine_request 命令。Rust 通过持久 Python 进程的 UTF-8 JSON Lines 管道发送 JSON-RPC 2.0 请求，Python 管理项目、托管矢量/表格/GeoTIFF 和任务。接口见 shared/protocol.md，前端类型见 shared/contracts.ts，阶段约束见 phase-1a.md、phase-1b.md 和 phase-1c.md。
+React 调用受限的 Tauri engine_request 命令。Rust 通过持久 Python 进程的 UTF-8 JSON Lines 管道发送 JSON-RPC 2.0 请求，Python 管理项目、托管矢量/表格/GeoTIFF 和任务。接口见 shared/protocol.md，前端类型见 shared/contracts.ts，当前阶段约束见 phase-1d.md。
 
 ## 进程职责
 
 - React：项目编辑、原生文件选择、图层与地图、分页属性表、导入检查与任务状态。纯浏览器明确显示原生桥接不可用。
 - Tauri：原生命令白名单、子进程启动、请求序列化、响应 ID 验证、超时、大小上限和桌面日志。
 - Python 父进程：参数验证、项目锁、SQLite 事务、任务启动/取消/回收、短查询和日志。
-- GIS worker：读取原文件、分批完整扫描、写入暂存 GeoPackage 或原生 GeoTIFF 快照、重读验证；通过任务文件报告进度，不写项目元数据库。
+- GIS worker：读取原文件、分批完整扫描、写入暂存 GeoPackage 或原生 GeoTIFF 快照、重读验证；项目另存时创建独立 SQLite 备份和目标暂存目录，不修改活动项目元数据库。通过任务文件报告进度。
 - Windows Job Object：宿主退出后终止引擎及其后代，避免孤立进程继续持有项目。
 
-每个项目同时运行一个导入、导出或坐标转点任务。worker 使用相同冻结 EXE 的私有启动模式。取消先发协作标记，再在必要时终止并回收 worker；项目关闭和切换也会结束活动任务。遗留运行状态在恢复时标记为中断。进度显示读取、写入、校验等真实阶段与可用计数，不虚构整体百分比。
+每个项目同时运行一个导入、导出、坐标转点、另存或来源核对任务。worker 使用相同冻结 EXE 的私有启动模式。取消先发协作标记，再在必要时终止并回收 worker；项目关闭和切换也会结束活动任务。遗留运行状态在恢复时标记为中断。进度显示读取、写入、校验等真实阶段与可用计数，不虚构整体百分比。
 
 CSV 使用标准库 csv 严格解码，XLSX 使用 openpyxl 只读解析并保留公式文本。表格是独立非空间 GeoPackage，选择字段/CRS 后才能派生点。Excel 类型/格式信息与主表共同进入一个不可变快照，采用相同的发布、校验、导出和恢复机制。
 
@@ -23,6 +23,12 @@ GeoTIFF 由 Rasterio/GDAL 读取，保留独立文件快照。导入扫描全部
 引擎 stdout 只承载协议；stderr 被宿主接入桌面日志，Python 另写轮转日志。托管数据落文件，接口仅返回元数据或有界查询。属性页最多 500 条；地图最多 2,000 个要素、100,000 个顶点；单次查询最多 2 MiB。地图截断会明确报告，权威副本不做显示简化。
 
 发布顺序为暂存文件关闭并校验、记录待发布状态、无覆盖发布文件、事务登记 Dataset/Layer 与任务完成。恢复逻辑处理发布与登记之间的中断。项目内部路径采用相对路径，读取受活动项目和 Dataset 身份限制。
+
+另存任务使用目标同卷的独立暂存目录与归属标记，核对注册表和文件哈希后执行无覆盖目录发布。原项目保存待发布清单，失败后的冲突内容保留以供检查；未完成的目录不得当作已完成项目打开。复制期间阻止项目/图层修改，副本载入成功后前端才切换；载入失败保留原有草稿并标记需要重开。
+
+来源重新定位由 worker 按导入时的指纹口径核对候选，父进程事务追加历史记录。原始 Dataset.source 保持不变，派生点的当前来源按父表 ID/版本解析。普通来源状态检查只读文件存在性，不冒充完整内容核验。
+
+CART-00 的离屏 OpenLayers 与 Python 文档渲染探针及独立依赖位于 scripts/cartography-probe，未进入产品 RPC 或安装器。草案与实测能力见 cartography-spec-draft.md 和 verification-cartography-probe.md。
 
 ## 开发与发布
 

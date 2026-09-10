@@ -1,6 +1,6 @@
-# Phase 1C 数据模型
+# Phase 1D 数据模型
 
-项目格式、协议和应用版本分别管理：本阶段目标 schemaVersion=4，protocolVersion=4，应用版本 0.4.0；验收状态见 Phase 1C 验证记录。
+项目格式、协议和应用版本分别管理：本阶段目标 schemaVersion=5，protocolVersion=5，应用版本 0.5.0；当前范围见 Phase 1D 说明，验收状态见执行说明。
 
 Project 保存 id、name、description、createdAt、updatedAt、analysisCrs、displayCrs 和 viewState。projectPath 为打开位置，不应被当作永久来源身份；具体存储结构以引擎 repository 的 schema 为准。
 
@@ -20,8 +20,12 @@ TableDataset 保存独立 CSV/XLSX 表格，geometryType、CRS 和范围均为 n
 
 坐标转点创建新的 VectorDataset，记录父表 ID/版本、X/Y 字段和声明 CRS。每行对应一条结果，错误坐标保留属性、来源行号和错误原因，几何为 NULL；父表快照不被改写。
 
-Task 保存 import/export/points 类型、真实阶段、可用计数、状态、错误、输入/输出身份及时间。running、completed、failed、cancelled、interrupted 含义不同；只有发布与登记成功才进入 completed。任务的临时请求/进度/结果文件不替代 project.spa 的权威登记。
+Task 保存 import/export/points/save_as/relocate 类型、真实阶段、可用计数、状态、错误、输入/输出身份及时间。running、completed、failed、cancelled、interrupted 含义不同；只有发布与登记成功才进入 completed。任务的临时请求/进度/结果文件不替代 project.spa 的权威登记。
 
-旧 v1/v2/v3 项目在取得独占锁后，通过 SQLite backup API 生成并验证备份，再事务迁移；schema 4 延续统一 datasets 登记表，为 map_layers 增加可空 raster_style，保留既有数据、图层、任务和发布日志。备份失败或迁移失败不得直接改写版本。未来版本仍拒绝。具体表结构以 projects.py/workspace.py 的实现为准。
+旧 v1/v2/v3/v4 项目在取得独占锁后，通过 SQLite backup API 生成并验证备份，再事务迁移。schema 5 保留统一 datasets 和 raster_style，扩展任务类型，增加只追加的 source_locations 来源位置历史和 pending_copies 项目复制发布日志。备份失败或迁移失败不得直接改写版本；不支持的新版本拒绝打开。
+
+另存为给新项目分配独立 ID 和创建时间，保留 Dataset JSON、ID、版本、快照字节、图层及历史记录。当前项目草稿只写入副本，不隐式保存原项目。通过 SQLite backup 建立一致性数据库，按注册表复制全部数据；缓存、锁文件、旧迁移备份和暂存任务不属于复制输入。文件夹移动后，托管路径和派生点的父表按当前项目目录解析。
+
+来源重新定位核对原始导入指纹后写入 source_locations，不修改只读 datasets。来源存在与身份已核对是不同状态；verifiedAt 仅表示过去一次成功核对。更改了内容的来源必须重新导入，不可借重新定位替换数据版本。具体存储、迁移和恢复见 projects.py、workspace.py、portability.py。
 
 Analysis 和 Result 业务对象留到 Phase 2。当前没有正式土地统计成果，不能把导入报告当作分析合格证书。

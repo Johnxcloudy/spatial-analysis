@@ -30,7 +30,7 @@ def test_project_create_save_close_open_round_trip(tmp_path: Path) -> None:
     project_dir = tmp_path / "含空格 project"
 
     created = engine.dispatch("project.create", {"directory": str(project_dir), "name": "Land study"})
-    assert created["schemaVersion"] == 4
+    assert created["schemaVersion"] == 5
     assert created["name"] == "Land study"
     assert created["description"] == ""
     assert created["analysisCrs"] is None
@@ -189,7 +189,7 @@ def test_open_migrates_v1_after_creating_a_valid_backup(tmp_path: Path) -> None:
 
     opened = Engine().dispatch("project.open", {"path": str(project_path)})
 
-    assert opened["schemaVersion"] == 4
+    assert opened["schemaVersion"] == 5
     backups = list((project_path.parent / "backups").glob("*.spa"))
     assert len(backups) == 1
     with sqlite3.connect(backups[0]) as backup:
@@ -210,12 +210,12 @@ def test_failed_migration_rolls_back_releases_lock_and_keeps_active_project(
     with sqlite3.connect(legacy_path) as connection:
         connection.execute("PRAGMA user_version = 1")
 
-    real_migrate = project_module._migrate_to_v4
+    real_migrate = project_module._migrate_to_current
 
     def fail_migration(path: Path, source_version: int) -> None:
         raise sqlite3.OperationalError("injected migration failure")
 
-    monkeypatch.setattr(project_module, "_migrate_to_v4", fail_migration)
+    monkeypatch.setattr(project_module, "_migrate_to_current", fail_migration)
     with pytest.raises(DomainError) as error:
         engine.dispatch("project.open", {"path": str(legacy_path)})
     assert error.value.kind == "project_migration_failed"
@@ -223,9 +223,9 @@ def test_failed_migration_rolls_back_releases_lock_and_keeps_active_project(
     with sqlite3.connect(legacy_path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
 
-    monkeypatch.setattr(project_module, "_migrate_to_v4", real_migrate)
+    monkeypatch.setattr(project_module, "_migrate_to_current", real_migrate)
     contender = Engine()
-    assert contender.dispatch("project.open", {"path": str(legacy_path)})["schemaVersion"] == 4
+    assert contender.dispatch("project.open", {"path": str(legacy_path)})["schemaVersion"] == 5
     contender.close()
 
 
@@ -279,7 +279,7 @@ def test_open_migrates_v2_registry_tasks_and_layers_with_v2_backup(tmp_path: Pat
 
     opener = Engine()
     opened = opener.dispatch("project.open", {"path": str(project_path)})
-    assert opened["schemaVersion"] == 4
+    assert opened["schemaVersion"] == 5
     with sqlite3.connect(project_path) as connection:
         assert connection.execute("SELECT dataset_id FROM datasets").fetchone()[0] == dataset_id
         assert connection.execute("SELECT layer_id FROM map_layers").fetchone()[0] == layer_id
@@ -346,7 +346,7 @@ def test_open_migrates_v3_datasets_tasks_layers_and_journals_with_backup(tmp_pat
     opener = Engine()
     opened = opener.dispatch("project.open", {"path": str(project_path)})
 
-    assert opened["schemaVersion"] == 4
+    assert opened["schemaVersion"] == 5
     with sqlite3.connect(project_path) as connection:
         assert connection.execute("SELECT dataset_id FROM datasets ORDER BY dataset_id").fetchall() == [(vector_id,), (table_id,)]
         assert connection.execute("SELECT layer_id, raster_style FROM map_layers").fetchone() == (layer_id, None)

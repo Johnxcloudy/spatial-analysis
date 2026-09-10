@@ -18,8 +18,8 @@ beforeAll(() => Object.defineProperties(HTMLDialogElement.prototype, { showModal
 afterAll(() => methods.forEach((method, index) => { const descriptor = descriptors[index]; if (descriptor) Object.defineProperty(HTMLDialogElement.prototype, method, descriptor); else Reflect.deleteProperty(HTMLDialogElement.prototype, method); }));
 afterEach(cleanup);
 
-const project: Project = { id: 'raster-project', name: 'Raster project', description: '', schemaVersion: 4, createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z', projectPath: 'C:/test/raster/project.spa', analysisCrs: null, displayCrs: 'EPSG:3857', viewState: { center: [114, 27], zoom: 6 } };
-const runtime = { protocolVersion: 4, engineVersion: '0.4.0', pythonVersion: 'test', packaged: false, versions: {}, drivers: {}, logPath: 'fixture' };
+const project: Project = { id: 'raster-project', name: 'Raster project', description: '', schemaVersion: 5, createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z', projectPath: 'C:/test/raster/project.spa', analysisCrs: null, displayCrs: 'EPSG:3857', viewState: { center: [114, 27], zoom: 6 } };
+const runtime = { protocolVersion: 5, engineVersion: '0.5.0', pythonVersion: 'test', packaged: false, versions: {}, drivers: {}, logPath: 'fixture' };
 const style: RasterStyle = { mode: 'gray', bands: [1], ranges: [[0, 100]], resampling: 'nearest' };
 const raster: RasterDataset = {
   id: 'raster-1', name: 'Terrain', kind: 'raster', version: 'raster-version', relativePath: 'rasters/raster.tif', createdAt: project.createdAt,
@@ -51,7 +51,7 @@ function fixture(unknown = false) {
     if (method === 'vector.page') return { datasetId: vector.id, version: vector.version, fields: [], rows: [], total: 0, offset: 0, limit: 200, hasMore: false, truncated: false };
     throw new Error(`Unexpected fixture method ${method}`);
   });
-  const bridge: DesktopBridge = { available: () => true, request: request as DesktopBridge['request'], chooseParent: vi.fn(async () => 'C:/test'), chooseProject: vi.fn(async () => project.projectPath), chooseVector: vi.fn(async () => 'C:/test/vector.gpkg'), chooseGdb: vi.fn(async () => 'C:/test/vector.gdb'), selectTableSource: vi.fn(async () => 'C:/test/table.csv'), chooseRaster: vi.fn(async () => raster.source.path), chooseRasterExport: vi.fn(async () => 'C:/test/export.tif'), chooseExport: vi.fn(async () => 'C:/test/export.gpkg'), join: vi.fn(async (...parts) => parts.join('/')), diagnosticDirectory: vi.fn(async () => 'C:/test/cache'), onClose: vi.fn(async () => () => undefined), closeWindow: vi.fn(async () => undefined) };
+  const bridge: DesktopBridge = { available: () => true, request: request as DesktopBridge['request'], chooseParent: vi.fn(async () => 'C:/test'), chooseProject: vi.fn(async () => project.projectPath), chooseVector: vi.fn(async () => 'C:/test/vector.gpkg'), chooseGdb: vi.fn(async () => 'C:/test/vector.gdb'), selectTableSource: vi.fn(async () => 'C:/test/table.csv'), chooseSource: vi.fn(async () => 'C:/test/moved.gpkg'), chooseRaster: vi.fn(async () => raster.source.path), chooseRasterExport: vi.fn(async () => 'C:/test/export.tif'), chooseExport: vi.fn(async () => 'C:/test/export.gpkg'), join: vi.fn(async (...parts) => parts.join('/')), diagnosticDirectory: vi.fn(async () => 'C:/test/cache'), onClose: vi.fn(async () => () => undefined), closeWindow: vi.fn(async () => undefined) };
   return { bridge, request };
 }
 

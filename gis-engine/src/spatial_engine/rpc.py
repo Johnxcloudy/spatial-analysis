@@ -19,9 +19,12 @@ ALLOWED_METHODS = {
     "project.create",
     "project.open",
     "project.save",
+    "project.saveAs",
     "project.close",
     "diagnostics.run",
     "source.inspect",
+    "source.status",
+    "source.relocate",
     "workspace.get",
     "vector.import",
     "vector.export",
@@ -70,7 +73,10 @@ class Engine:
             self.tasks.close()
             return self.projects.open(values)
         if method == "project.save":
+            self.tasks.require_mutation_allowed()
             return self.projects.save(values)
+        if method == "project.saveAs":
+            return self.tasks.start_save_as(values)
         if method == "project.close":
             require_exact_keys(values, set())
             self.tasks.close()
@@ -79,6 +85,10 @@ class Engine:
             return run_diagnostics(values)
         if method == "source.inspect":
             return vectors.inspect_source(values)
+        if method == "source.status":
+            return self.workspace.source_status(values)
+        if method == "source.relocate":
+            return self.tasks.start_relocation(values)
         if method == "table.inspect":
             return tables.inspect_table(values)
         if method == "raster.inspect":
@@ -116,10 +126,13 @@ class Engine:
         if method == "task.cancel":
             return self.tasks.cancel(values)
         if method == "layer.update":
+            self.tasks.require_mutation_allowed()
             return self.workspace.update_layer(values)
         if method == "layer.reorder":
+            self.tasks.require_mutation_allowed()
             return self.workspace.reorder_layers(values)
         if method == "layer.remove":
+            self.tasks.require_mutation_allowed()
             return self.workspace.remove_layer(values)
         queries = {
             "vector.page": vector_queries.attribute_page,

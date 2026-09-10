@@ -67,8 +67,8 @@ def _read_request(path: Path) -> dict[str, Any]:
         "protocolVersion", "taskId", "kind", "payload", "workDir", "publishPath"
     }:
         raise DomainError("Worker request shape is invalid", kind="invalid_worker_request")
-    kinds = {"import", "export", "table_import", "points", "raster_import", "raster_export"}
-    if request["protocolVersion"] != 3 or request["kind"] not in kinds:
+    kinds = {"import", "export", "table_import", "points", "raster_import", "raster_export", "save_as", "relocate"}
+    if request["protocolVersion"] != 4 or request["kind"] not in kinds:
         raise DomainError("Worker request version or kind is invalid", kind="invalid_worker_request")
     if not isinstance(request["taskId"], str):
         raise DomainError("Worker task id is invalid", kind="invalid_worker_request")
@@ -103,6 +103,11 @@ def _finite_float(value: str) -> float:
 
 
 def _validate_result(kind: str, result: Any, work_dir: Path) -> dict[str, Any]:
+    if kind in {"save_as", "relocate"}:
+        expected = {"manifest", "temporaryPath", "projectId"} if kind == "save_as" else {"datasetId", "sourcePath", "fingerprint", "verifiedAt"}
+        if not isinstance(result, dict) or set(result) != expected:
+            raise DomainError("Portability operation returned an invalid result", kind="invalid_worker_result")
+        return result
     export_kinds = {"export", "raster_export"}
     expected = {"artifactPath"} if kind in export_kinds else {"dataset", "artifactPath"}
     if not isinstance(result, dict) or set(result) != expected:
@@ -179,7 +184,10 @@ def run_worker(request_path: Path) -> int:
 
         if cancelled():
             raise DomainError("Task was cancelled", kind="task_cancelled")
-        if request["kind"] in {"import", "export"}:
+        if request["kind"] in {"save_as", "relocate"}:
+            from . import portability
+            operation = portability.copy_project if request["kind"] == "save_as" else portability.relocate_source
+        elif request["kind"] in {"import", "export"}:
             from . import vectors
 
             operation = vectors.import_vector if request["kind"] == "import" else vectors.export_vector

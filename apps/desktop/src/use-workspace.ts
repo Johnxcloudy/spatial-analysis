@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { PROTOCOL_VERSION, type EngineError, type MapLayer, type ProbeReport, type Project, type RuntimeInfo, type SourceInspection, type TableOptions, type Task, type ViewState, type Workspace } from '../../../shared/contracts';
+import { useCallback, useEffect, useRef, useState, type SetStateAction } from 'react';
+import { PROTOCOL_VERSION, type Dataset, type EngineError, type MapLayer, type ProbeReport, type Project, type RuntimeInfo, type SourceInspection, type TableOptions, type Task, type ViewState, type Workspace } from '../../../shared/contracts';
 import { normalizeError, type DesktopBridge } from './bridge';
 import { draftFromProject, hasUnsavedChanges, validateDirectoryName, type ProjectDraft } from './project-state';
 
 export type ProjectAction = 'new' | 'open' | 'close' | 'exit';
+interface CopyIntent { taskId: string; token: number; projectId: string; destination: string }
+const samePath = (left: string, right: string) => left.replaceAll('\\', '/').toLowerCase() === right.replaceAll('\\', '/').toLowerCase();
 
 export function useWorkspace(bridge: DesktopBridge) {
   const [project, setProject] = useState<Project | null>(null);
-  const [draft, setDraft] = useState<ProjectDraft | null>(null);
+  const [draft, updateDraft] = useState<ProjectDraft | null>(null);
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [sessionId, setSessionId] = useState(0);
@@ -23,6 +25,9 @@ export function useWorkspace(bridge: DesktopBridge) {
   const [newProject, setNewProject] = useState(false);
   const [pending, setPending] = useState<ProjectAction | null>(null);
   const [needsReopen, setNeedsReopen] = useState(false);
+  const [copyIntent, setCopyIntent] = useState<CopyIntent | null>(null);
+  const openingCopy = useRef<string | null>(null);
+  const copyingRef = useRef(false);
   const [native] = useState(() => bridge.available());
   const inFlight = useRef(false);
   const projectRef = useRef<Project | null>(null);
@@ -30,6 +35,12 @@ export function useWorkspace(bridge: DesktopBridge) {
   const generation = useRef(0);
   projectRef.current = project;
   const dirty = hasUnsavedChanges(project, draft);
+  const activeTask = workspace?.tasks.find((task) => task.status === 'running') ?? null;
+  const copying = !needsReopen && (!!copyIntent || activeTask?.kind === 'save_as');
+  copyingRef.current = copying;
+  const setDraft = useCallback((value: SetStateAction<ProjectDraft | null>) => {
+    if (!copyingRef.current) updateDraft(value);
+  }, []);
 
   const handleFailure = useCallback((cause: unknown) => {
     const failure = normalizeError(cause);
@@ -37,6 +48,8 @@ export function useWorkspace(bridge: DesktopBridge) {
     if (failure.data?.kind?.startsWith('ENGINE_')) {
       setRuntime(null);
       generation.current += 1;
+      setCopyIntent(null);
+      copyingRef.current = false;
       if (projectRef.current) {
         recoveryRef.current = true;
         setNeedsReopen(true);
@@ -44,8 +57,8 @@ export function useWorkspace(bridge: DesktopBridge) {
     }
   }, []);
 
-  const run = useCallback(async (label: string, action: () => Promise<void>): Promise<boolean> => {
-    if (inFlight.current) return false;
+  const run = useCallback(async (label: string, action: () => Promise<void>, duringCopy = false): Promise<boolean> => {
+    if (inFlight.current || (copyingRef.current && !duringCopy)) return false;
     inFlight.current = true;
     setBusy(label);
     setError(null);
@@ -91,19 +104,36 @@ export function useWorkspace(bridge: DesktopBridge) {
     await loadWorkspace(activeProject(), generation.current);
   }), [run, loadWorkspace, activeProject]);
 
-  const acceptProject = async (next: Project) => {
+  const acceptProject = useCallback(async (next: Project) => {
+    const token = generation.current;
+    let nextWorkspace: Workspace;
+    try {
+      nextWorkspace = await bridge.request('workspace.get', { path: next.projectPath });
+      if (nextWorkspace.projectId !== next.id) throw new Error('工作区响应与新项目不匹配。');
+    } catch (cause) {
+      if (generation.current === token && projectRef.current) {
+        generation.current += 1;
+        recoveryRef.current = true;
+        setNeedsReopen(true);
+      }
+      throw cause;
+    }
+    if (generation.current !== token) return;
     generation.current += 1;
     setSessionId(generation.current);
     projectRef.current = next;
     setProject(next);
-    setDraft(draftFromProject(next));
+    updateDraft(draftFromProject(next));
+    setCopyIntent(null);
+    copyingRef.current = false;
     setReport(null);
     recoveryRef.current = false;
     setNeedsReopen(false);
-    setWorkspace(null);
-    setSelectedLayerId(null);
-    await loadWorkspace(next, generation.current);
-  };
+    setWorkspace(nextWorkspace);
+    const firstLayer = nextWorkspace.layers[0];
+    const firstTable = nextWorkspace.datasets.find((dataset) => dataset.kind === 'table');
+    setSelectedSource(firstLayer ? { kind: 'layer', id: firstLayer.id } : firstTable ? { kind: 'table', id: firstTable.id } : null);
+  }, [bridge]);
 
   const connect = useCallback(() => run('连接引擎', async () => {
     setRuntime(null);
@@ -150,7 +180,8 @@ export function useWorkspace(bridge: DesktopBridge) {
         setSessionId(generation.current);
         projectRef.current = null;
         setProject(null);
-        setDraft(null);
+        updateDraft(null);
+        setCopyIntent(null);
         setReport(null);
         recoveryRef.current = false;
         setNeedsReopen(false);
@@ -170,21 +201,21 @@ export function useWorkspace(bridge: DesktopBridge) {
   };
 
   const requestAction = (action: ProjectAction) => {
-    if (inFlight.current) return;
+    if (inFlight.current || copyingRef.current) return;
     if (dirty) { setPending(action); return; }
     void executeAction(action);
   };
 
-  const closeState = useRef({ busy, dirty, requestAction });
-  closeState.current = { busy, dirty, requestAction };
+  const closeState = useRef({ busy, dirty, copying, requestAction });
+  closeState.current = { busy, dirty, copying, requestAction };
   useEffect(() => {
     if (!native) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void bridge.onClose((preventDefault) => {
-      if (closeState.current.busy || closeState.current.dirty) {
+      if (closeState.current.busy || closeState.current.dirty || closeState.current.copying) {
         preventDefault();
-        if (!closeState.current.busy) closeState.current.requestAction('exit');
+        if (!closeState.current.busy && !closeState.current.copying) closeState.current.requestAction('exit');
       }
     }).then((cleanup) => { if (disposed) cleanup(); else unlisten = cleanup; }).catch((cause) => setError(normalizeError(cause)));
     return () => { disposed = true; unlisten?.(); };
@@ -192,11 +223,11 @@ export function useWorkspace(bridge: DesktopBridge) {
 
   useEffect(() => {
     const guard = (event: BeforeUnloadEvent) => {
-      if (dirty || busy) { event.preventDefault(); event.returnValue = ''; }
+      if (dirty || busy || copying) { event.preventDefault(); event.returnValue = ''; }
     };
     window.addEventListener('beforeunload', guard);
     return () => window.removeEventListener('beforeunload', guard);
-  }, [dirty, busy]);
+  }, [dirty, busy, copying]);
 
   const resolvePending = async (choice: 'save' | 'discard' | 'cancel') => {
     if (choice === 'cancel') { setPending(null); return; }
@@ -226,7 +257,7 @@ export function useWorkspace(bridge: DesktopBridge) {
   });
 
   const setView = useCallback((viewState: ViewState) => {
-    setDraft((current) => current ? { ...current, viewState } : current);
+    if (!copyingRef.current) updateDraft((current) => current ? { ...current, viewState } : current);
   }, []);
 
   const inspectSource = async (sourcePath: string, encoding: string | null): Promise<SourceInspection | null> => {
@@ -241,6 +272,38 @@ export function useWorkspace(bridge: DesktopBridge) {
   const rememberTask = useCallback((task: Task) => {
     setWorkspace((current) => current ? { ...current, tasks: [task, ...current.tasks.filter((item) => item.id !== task.id)] } : current);
   }, []);
+
+  const saveAs = (name: string, parent: string) => run('开始另存项目', async () => {
+    const current = activeProject();
+    if (!draft || !draft.name.trim()) throw new Error('项目名称不能为空。');
+    if (activeTask) throw new Error('请等待当前任务完成。');
+    const invalid = validateDirectoryName(name);
+    if (invalid) throw new Error(invalid);
+    if (!parent) throw new Error('请选择项目父目录。');
+    const token = generation.current;
+    const directory = await bridge.join(parent, name);
+    const destination = await bridge.join(directory, 'project.spa');
+    const task = await bridge.request('project.saveAs', { path: current.projectPath, directory, name: draft.name.trim(), description: draft.description, analysisCrs: draft.analysisCrs.trim() || null, displayCrs: current.displayCrs, viewState: draft.viewState });
+    if (generation.current !== token || projectRef.current?.id !== current.id) return;
+    if (task.kind !== 'save_as' || task.datasetId !== null || !task.destination || !samePath(task.destination, destination)) throw new Error('另存任务响应与目标项目不匹配。');
+    copyingRef.current = true;
+    setCopyIntent({ taskId: task.id, token, projectId: current.id, destination });
+    rememberTask(task);
+    setNotice('项目另存任务已开始');
+  });
+
+  const relocateSource = (dataset: Dataset) => run('重新定位来源', async () => {
+    const current = activeProject();
+    if (activeTask) throw new Error('请等待当前任务完成。');
+    if (dataset.source.driver === 'TablePoints') throw new Error('派生点数据使用项目内的父表格。');
+    const token = generation.current;
+    const sourcePath = await bridge.chooseSource(dataset);
+    if (!sourcePath || Array.isArray(sourcePath) || generation.current !== token) return;
+    const task = await bridge.request('source.relocate', { path: current.projectPath, datasetId: dataset.id, sourcePath });
+    if (generation.current !== token || projectRef.current?.id !== current.id) return;
+    rememberTask(task);
+    setNotice('来源身份核对已开始');
+  });
 
   const importVector = (params: { sourcePath: string; sourceLayer: string; encoding: string | null; assignedCrs: string | null }) => run('开始导入', async () => {
     const current = activeProject();
@@ -302,7 +365,6 @@ export function useWorkspace(bridge: DesktopBridge) {
     setNotice('导出任务已开始');
   });
 
-  const activeTask = workspace?.tasks.find((task) => task.status === 'running') ?? null;
   useEffect(() => {
     if (!activeTask || !project || needsReopen || !runtime) return;
     let cancelled = false;
@@ -312,12 +374,14 @@ export function useWorkspace(bridge: DesktopBridge) {
       try {
         const next = await bridge.request('task.get', { path: project.projectPath, taskId: activeTask.id });
         if (cancelled || token !== generation.current) return;
+        if (next.id !== activeTask.id || next.kind !== activeTask.kind) throw new Error('任务响应与当前任务不匹配。');
         if (next.status === 'running') {
           rememberTask(next);
           timer = setTimeout(poll, 700);
         }
         else {
-          setNotice(next.status === 'completed' ? next.kind === 'import' ? '数据已导入' : next.kind === 'points' ? '点数据已生成' : '数据已导出' : next.error || (next.status === 'cancelled' ? '任务已取消' : '任务未完成'));
+          const completedNotice: Record<Task['kind'], string> = { import: '数据已导入', points: '点数据已生成', export: '数据已导出', save_as: '项目副本已创建', relocate: '来源位置已更新' };
+          setNotice(next.status === 'completed' ? completedNotice[next.kind] : next.error || (next.status === 'cancelled' ? '任务已取消' : '任务未完成'));
           rememberTask(next);
           await loadWorkspace(project, token, next.status === 'completed' && next.kind !== 'export' ? next.datasetId : null);
         }
@@ -327,11 +391,41 @@ export function useWorkspace(bridge: DesktopBridge) {
     return () => { cancelled = true; clearTimeout(timer); };
   }, [activeTask?.id, project?.id, needsReopen, runtime, bridge, rememberTask, loadWorkspace, handleFailure]);
 
+  // Only a copy initiated in this live session can trigger a project transition.
+  useEffect(() => {
+    if (!copyIntent || busy || needsReopen || !runtime || openingCopy.current === copyIntent.taskId) return;
+    if (copyIntent.token !== generation.current || projectRef.current?.id !== copyIntent.projectId) { setCopyIntent(null); return; }
+    const task = workspace?.tasks.find((item) => item.id === copyIntent.taskId);
+    if (!task || task.status === 'running') return;
+    if (task.status !== 'completed') { setCopyIntent(null); return; }
+    openingCopy.current = task.id;
+    void run('打开项目副本', async () => {
+      if (task.kind !== 'save_as' || !task.destination || !samePath(task.destination, copyIntent.destination)) throw new Error('另存任务响应与目标项目不匹配。');
+      const next = await bridge.request('project.open', { path: task.destination });
+      if (copyIntent.token !== generation.current) return;
+      try {
+        if (next.id === copyIntent.projectId || !samePath(next.projectPath, copyIntent.destination)) throw new Error('打开的项目与另存副本不匹配。');
+        await acceptProject(next);
+      } catch (cause) {
+        if (copyIntent.token === generation.current) {
+          generation.current += 1;
+          recoveryRef.current = true;
+          setNeedsReopen(true);
+        }
+        throw cause;
+      }
+      setNotice('项目已另存并打开');
+    }, true).finally(() => {
+      setCopyIntent((current) => current?.taskId === task.id ? null : current);
+      openingCopy.current = null;
+    });
+  }, [copyIntent, workspace?.tasks, busy, needsReopen, runtime, bridge, run, acceptProject]);
+
   const cancelTask = (taskId: string) => run('取消任务', async () => {
     const current = activeProject();
     rememberTask(await bridge.request('task.cancel', { path: current.projectPath, taskId }));
     await loadWorkspace(current, generation.current);
-  });
+  }, true);
 
   const updateLayer = (layerId: string, changes: Partial<Pick<MapLayer, 'name' | 'visible' | 'opacity' | 'color' | 'categoryField' | 'categoryColors' | 'rasterStyle'>>) => run('保存图层设置', async () => {
     const current = activeProject();
@@ -352,7 +446,7 @@ export function useWorkspace(bridge: DesktopBridge) {
     await loadWorkspace(current, generation.current);
   });
 
-  return { project, draft, setDraft, setView, sessionId, runtime, workspace, selectedLayerId, selectedTableId, setSelectedLayerId, setSelectedTableId, refreshWorkspace, activeTask, inspectSource, inspectTable, inspectRaster, importVector, importTable, importRaster, generatePoints, exportVector, exportTable, exportRaster, cancelTask, updateLayer, reorderLayers, removeLayer, handleFailure, report, busy, error, notice, dirty, native, needsReopen, newProject, setNewProject, pending, requestAction, resolvePending, create, save, connect, diagnose };
+  return { project, draft, setDraft, setView, sessionId, runtime, workspace, selectedLayerId, selectedTableId, setSelectedLayerId, setSelectedTableId, refreshWorkspace, activeTask, copying, saveAs, relocateSource, inspectSource, inspectTable, inspectRaster, importVector, importTable, importRaster, generatePoints, exportVector, exportTable, exportRaster, cancelTask, updateLayer, reorderLayers, removeLayer, handleFailure, report, busy, error, notice, dirty, native, needsReopen, newProject, setNewProject, pending, requestAction, resolvePending, create, save, connect, diagnose };
 }
 
 export type WorkspaceState = ReturnType<typeof useWorkspace>;

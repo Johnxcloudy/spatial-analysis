@@ -2,16 +2,19 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { appCacheDir, dirname, join } from '@tauri-apps/api/path';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import type { AttributePage, EngineError, EngineMethod, FeatureResult, MapLayer, ProbeReport, Project, RasterInspection, RasterRenderResult, RasterSampleResult, RuntimeInfo, SourceInspection, TableInspection, Task, ViewportResult, Workspace } from '../../../shared/contracts';
+import type { AttributePage, Dataset, EngineError, EngineMethod, FeatureResult, MapLayer, ProbeReport, Project, RasterInspection, RasterRenderResult, RasterSampleResult, RuntimeInfo, SourceInspection, SourceStatus, TableInspection, Task, ViewportResult, Workspace } from '../../../shared/contracts';
 
 interface EngineResults {
   'runtime.info': RuntimeInfo;
   'project.create': Project;
   'project.open': Project;
   'project.save': Project;
+  'project.saveAs': Task;
   'project.close': { closed: true };
   'diagnostics.run': ProbeReport;
   'source.inspect': SourceInspection;
+  'source.status': SourceStatus;
+  'source.relocate': Task;
   'workspace.get': Workspace;
   'vector.import': Task;
   'vector.export': Task;
@@ -77,6 +80,16 @@ export const desktop = {
   chooseGdb: () => open({ multiple: false, directory: true, title: '选择 File Geodatabase (.gdb)' }),
   selectTableSource: () => open({ multiple: false, directory: false, title: '导入坐标表', filters: [{ name: '坐标表', extensions: ['csv', 'xlsx'] }] }),
   chooseRaster: () => open({ multiple: false, directory: false, title: '导入 GeoTIFF', filters: [{ name: 'GeoTIFF', extensions: ['tif', 'tiff'] }] }),
+  chooseSource: (dataset: Dataset) => {
+    if (dataset.source.driver === 'TablePoints') return Promise.resolve(null);
+    if (['OpenFileGDB', 'FileGDB'].includes(dataset.source.driver)) return open({ multiple: false, directory: true, title: '重新定位来源 File Geodatabase (.gdb)' });
+    const extensions = dataset.kind === 'raster' ? ['tif', 'tiff']
+      : dataset.source.driver === 'CSV' ? ['csv']
+      : dataset.source.driver === 'XLSX' ? ['xlsx']
+      : dataset.source.driver === 'ESRI Shapefile' ? ['shp']
+      : dataset.source.driver === 'GPKG' ? ['gpkg'] : ['geojson', 'json'];
+    return open({ multiple: false, directory: false, title: '重新定位来源', filters: [{ name: dataset.source.driver, extensions }] });
+  },
   chooseRasterExport: (name: string) => save({ title: '导出 GeoTIFF', defaultPath: `${name.replace(/[<>:"/\\|?*]/g, '_')}.tif`, filters: [{ name: 'GeoTIFF', extensions: ['tif', 'tiff'] }] }),
   chooseExport: (name: string) => save({ title: '导出 GeoPackage', defaultPath: `${name.replace(/[<>:"/\\|?*]/g, '_')}.gpkg`, filters: [{ name: 'GeoPackage', extensions: ['gpkg'] }] }),
   join,

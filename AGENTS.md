@@ -4,7 +4,7 @@ Windows-first personal GIS workstation for land-use overlay and area statistics.
 
 ## Current Scope
 
-Phase 1C (0.4.0) is delivered: self-contained GeoTIFF import/display/sample/export, with local distribution acceptance and Windows CI passed. Read docs/phase-1c.md and docs/verification-phase-1c.md for exact scope and evidence. Acceptance uses synthetic data. Cartography and optional Agent assistance remain future tasks in docs/cartography-roadmap.md. Phase 1D consolidation and Phase 2 land overlay follow 1C; neither has started. Read the latest user instruction and 执行说明.md before selecting work; shared/contracts.ts owns public contracts.
+Phase 1C (0.4.0) is delivered with local distribution acceptance and Windows CI passed. Phase 1D is authorized and in progress as of 2026-09-10: project Save As, source relocation, mixed-format regression and CART-00 probes. Read docs/phase-1d.md and docs/superpowers/plans/2026-09-10-phase-1d.md. Target application 0.5.0, public protocol/schema 5, worker protocol 4. Acceptance uses synthetic data. Formal cartography, Agent assistance and Phase 2 analysis remain future work. Read the latest user instruction and 执行说明.md before selecting work; shared/contracts.ts owns public contracts.
 
 ## Required Stage Closeout
 

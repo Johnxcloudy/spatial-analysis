@@ -362,6 +362,10 @@ class WorkspaceStore:
             raise DomainError("Dataset does not exist", kind="dataset_not_found", detail=dataset_id)
         return self._stored_dataset(row[0], dataset_id)
 
+    def source_status(self, params: dict[str, Any]) -> dict[str, Any]:
+        from .portability import source_status
+        return source_status(self, params)
+
     def managed_path(self, dataset: dict[str, Any]) -> Path:
         dataset, _ = _validate_dataset(dataset)
         root = self._project_root().resolve()
@@ -493,7 +497,7 @@ class WorkspaceStore:
     def create_task(
         self, kind: str, *, task_id: str | None = None, dataset_id: str | None = None, destination: str | None = None
     ) -> dict[str, Any]:
-        if kind not in {"import", "export", "points"}:
+        if kind not in {"import", "export", "points", "save_as", "relocate"}:
             raise InvalidParamsError("task kind is invalid")
         task_id = task_id or str(uuid.uuid4())
         _uuid_string(task_id, "task id")
@@ -557,7 +561,7 @@ class WorkspaceStore:
     def prepare_import_publication(self, task_id: str, dataset: dict[str, Any], staged_path: Path) -> None:
         dataset, serialized = _validate_dataset(dataset)
         task = self.task(task_id)
-        if task["kind"] == "export" or task["status"] != "running" or task["datasetId"] != dataset["id"]:
+        if task["kind"] not in {"import", "points"} or task["status"] != "running" or task["datasetId"] != dataset["id"]:
             raise DomainError("Import task does not match its result", kind="invalid_worker_result")
         if task["kind"] == "points" and dataset["kind"] != "vector":
             raise DomainError("Point task did not produce a vector dataset", kind="invalid_worker_result")
@@ -649,7 +653,8 @@ class WorkspaceStore:
         with self._connect(path) as connection:
             row = connection.execute(
                 "SELECT 1 FROM pending_publications WHERE task_id = ? "
-                "UNION ALL SELECT 1 FROM pending_exports WHERE task_id = ? LIMIT 1", (task_id, task_id)
+                "UNION ALL SELECT 1 FROM pending_exports WHERE task_id = ? "
+                "UNION ALL SELECT 1 FROM pending_copies WHERE task_id = ? LIMIT 1", (task_id, task_id, task_id)
             ).fetchone()
         return row is not None
 
@@ -737,6 +742,8 @@ class WorkspaceStore:
         if self._recovered_session is session:
             return
         path = session.path
+        from .portability import recover_copies
+        recover_copies(self)
         with self._connect(path) as connection:
             task_ids = [row[0] for row in connection.execute("SELECT task_id FROM pending_publications")]
         for task_id in task_ids:
@@ -772,7 +779,8 @@ class WorkspaceStore:
             unjournaled = connection.execute(
                 "SELECT task_id, kind, destination FROM tasks WHERE "
                 "task_id NOT IN (SELECT task_id FROM pending_publications) "
-                "AND task_id NOT IN (SELECT task_id FROM pending_exports)"
+                "AND task_id NOT IN (SELECT task_id FROM pending_exports) "
+                "AND task_id NOT IN (SELECT task_id FROM pending_copies)"
             ).fetchall()
         for row in unjournaled:
             if row["kind"] != "export" or self._remove_owned_export_pending(row["task_id"], row["destination"]):

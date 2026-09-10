@@ -66,6 +66,9 @@ jobs:
       - name: Verify GeoTIFF workflow through persistent RPC
         run: uv run --project gis-engine --frozen python scripts/verify-rasters.py --output .artifacts/rasters-source-ci
 
+      - name: Verify mixed project portability through persistent RPC
+        run: uv run --project gis-engine --frozen python scripts/verify-portability.py --output .artifacts/portability-source-ci
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all -- --check
 
@@ -82,6 +85,7 @@ jobs:
           uv run --project gis-engine --frozen python scripts/verify-vectors.py --executable $engine --output .artifacts/vectors-frozen-ci --fixtures .artifacts/vector-fixtures/manifest.json
           uv run --project gis-engine --frozen python scripts/verify-tables.py --executable $engine --output .artifacts/tables-frozen-ci
           uv run --project gis-engine --frozen python scripts/verify-rasters.py --executable $engine --output .artifacts/rasters-frozen-ci
+          uv run --project gis-engine --frozen python scripts/verify-portability.py --executable $engine --output .artifacts/portability-frozen-ci
 
       - name: Build Windows installer
         run: npm run tauri -- build
@@ -123,4 +127,6 @@ jobs:
             .artifacts/tables-*/**/*.log
             .artifacts/rasters-*/**/*.json
             .artifacts/rasters-*/**/*.log
+            .artifacts/portability-*/**/*.json
+            .artifacts/portability-*/**/*.log
             ${{ runner.temp }}/spatial-analysis-native-*/**/*.json

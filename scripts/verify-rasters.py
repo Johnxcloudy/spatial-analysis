@@ -78,9 +78,9 @@ def rejected(rpc: Rpc, method: str, params: dict, kind: str) -> None:
 
 def verify(rpc: Rpc, output: Path, checks: list[str], export_directory: Path) -> dict:
     runtime = rpc.call("runtime.info")
-    assert runtime["protocolVersion"] == 4 and runtime["engineVersion"] == "0.4.0", runtime
+    assert runtime["protocolVersion"] == 5 and runtime["engineVersion"] == "0.5.0", runtime
     project = rpc.call("project.create", {"directory": str(output / "project"), "name": "Raster acceptance"})
-    assert project["schemaVersion"] == 4
+    assert project["schemaVersion"] == 5
     path = project["projectPath"]
     sources = fixtures(output / "sources")
     datasets = {}
