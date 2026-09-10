@@ -4,7 +4,7 @@ Windows-first personal GIS workstation for land-use overlay and area statistics.
 
 ## Current Scope
 
-Phase 1C (0.4.0) is delivered with local distribution acceptance and Windows CI passed. Phase 1D is authorized and in progress as of 2026-09-10: project Save As, source relocation, mixed-format regression and CART-00 probes. Read docs/phase-1d.md and docs/superpowers/plans/2026-09-10-phase-1d.md. Target application 0.5.0, public protocol/schema 5, worker protocol 4. Acceptance uses synthetic data. Formal cartography, Agent assistance and Phase 2 analysis remain future work. Read the latest user instruction and 执行说明.md before selecting work; shared/contracts.ts owns public contracts.
+Phase 1D (0.5.0) is delivered as of 2026-09-10: project Save As, source relocation, mixed-format regression and CART-00 probes. Public protocol/schema 5, worker protocol 4. Local distribution acceptance and Windows CI run 34426091682 for pushed feature commit 41fe4b5 passed. Read docs/phase-1d.md, docs/verification-phase-1d.md and docs/superpowers/plans/2026-09-10-phase-1d.md. Acceptance uses synthetic data. Phase 2 land overlay/area statistics is next; formal cartography and Agent assistance remain future work. Select the authorized next milestone before application changes. Read the latest user instruction and 执行说明.md before selecting work; shared/contracts.ts owns public contracts.
 
 ## Required Stage Closeout
 
@@ -51,3 +51,17 @@ remain open. See 执行说明.md for exact commits and evidence boundaries.
 
 Phase 1C worker assignments are closed. Establish explicit file ownership for
 future parallel work. Use apply_patch and coordinate edits to shared files.
+
+## Phase 1D Delivery
+
+Save As preserves all registered snapshots, dataset identities, layer settings,
+terminal history and current form values under a new project identity. Source
+relocation appends verified location history without modifying provenance.
+Source presence is not current content verification; TablePoints resolve their
+parent inside the active project. Copy budget is 32 GiB and targets cannot exist.
+Historical mixed-case SHP bundles support name-preserving moves; full renaming
+may be unverifiable. Source/frozen/native/install acceptance passed locally.
+CART-00 is an isolated experiment, not a production renderer or Agent feature.
+Read 执行说明.md for final Git/CI state and outstanding acceptance boundaries.
+Phase 1D implementation worker assignments are closed; reassign ownership for
+future changes rather than assuming historical ownership remains active.

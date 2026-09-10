@@ -1,6 +1,6 @@
 # Spatial Analysis Desktop
 
-面向土地利用、用地叠加与面积统计的 Windows 本地 GIS 工作站。当前开发版本为 **0.5.0 / Phase 1D：项目携带与工作区整合**，已实现项目另存、来源重新定位和混合数据工作区支持，本机分发验收与 Git/CI 交付仍在进行。范围见 [Phase 1D](docs/phase-1d.md)，实际验收进度见 [Phase 1D 验证记录](docs/verification-phase-1d.md) 和 [执行说明](执行说明.md)；已交付的 0.4.0 历史证据保留在 [Phase 1C 验证记录](docs/verification-phase-1c.md)。
+面向土地利用、用地叠加与面积统计的 Windows 本地 GIS 工作站。当前版本为 **0.5.0 / Phase 1D：项目另存与工作区整合**，已实现项目另存、来源重新定位和混合数据工作区支持，本机分发验收及对应功能提交的 Windows CI 均通过，代码已推送。范围见 [Phase 1D](docs/phase-1d.md)，实际证据与限制见 [Phase 1D 验证记录](docs/verification-phase-1d.md) 和 [执行说明](执行说明.md)；0.4.0 历史证据保留在 [Phase 1C 验证记录](docs/verification-phase-1c.md)。
 
 ## 当前范围
 
@@ -76,7 +76,7 @@ CART-00 制图草案和独立渲染探针已完成，验证了完整合成样本
 
 ## 安装与开发
 
-Windows x64 安装器使用 NSIS，包含 Python/GDAL 引擎和 WebView2 离线安装组件；安装版无需另外安装 Python。0.5.0 的本机分发验收和 Git/CI 交付仍在进行，不能使用 0.4.0 的测试代替。安装包尚未签名，独立 Windows 10/11、离线环境和真实规划数据验收的进度见 [当前验证记录](docs/verification-phase-1d.md)。
+Windows x64 安装器使用 NSIS，包含 Python/GDAL 引擎和 WebView2 离线安装组件；安装版无需另外安装 Python。0.5.0 的本机临时安装、安装后运行和卸载已验收，对应功能提交的 Windows CI 通过。安装包尚未签名，独立 Windows 10/11、离线环境和真实规划数据验收的进度见 [当前验证记录](docs/verification-phase-1d.md)。
 
 开发环境需要 Node.js 24、Rust 1.98 或以上、Visual Studio C++ Build Tools、Windows SDK、WebView2 和 uv。冻结引擎验证脚本需要 PowerShell 7。Python 3.12 及 GIS 依赖由 uv 安装到 `gis-engine/.venv`。
 

@@ -1,6 +1,6 @@
 # Phase 1D 数据模型
 
-项目格式、协议和应用版本分别管理：本阶段目标 schemaVersion=5，protocolVersion=5，应用版本 0.5.0；当前范围见 Phase 1D 说明，验收状态见执行说明。
+项目格式、协议和应用版本分别管理：当前 schemaVersion=5，protocolVersion=5，应用版本 0.5.0；当前范围见 Phase 1D 说明，验收状态见执行说明。
 
 Project 保存 id、name、description、createdAt、updatedAt、analysisCrs、displayCrs 和 viewState。projectPath 为打开位置，不应被当作永久来源身份；具体存储结构以引擎 repository 的 schema 为准。
 

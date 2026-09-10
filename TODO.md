@@ -61,7 +61,7 @@
 [Windows CI 34335919203](https://github.com/Johnxcloudy/spatial-analysis/actions/runs/34335919203)
 为 success，安装器、原生冒烟及上传通过。阶段文档使用 `[skip ci]` 收尾。
 
-## Phase 1D（进行中）
+## Phase 1D（已交付，本机验收与功能提交 CI 通过）
 
 - [x] 用户于 2026-09-10 授权进入下一步，确定 [范围](docs/phase-1d.md) 和 [实施计划](docs/superpowers/plans/2026-09-10-phase-1d.md)。
 - [x] 项目另存为、来源状态/重新定位与 schema 1-4 迁移。
@@ -69,14 +69,18 @@
 - [x] CART-00 配置草案与渲染路径小样，源码/独立冻结/PDF/浏览器像素验证见 [探针证据](docs/verification-cartography-probe.md)。
 - [x] 契约与版本整合、独立复核、回归测试和构建；源码/冻结引擎工作流及原生验收。
 - [x] 完成 NSIS 安装包构建、本机临时安装、安装后 EXE 验证与卸载。
-- [ ] Git 提交/推送、对应 Windows CI 核查及阶段总结/精简交接收尾。
+- [x] Git 提交/推送、对应 Windows CI 核查及阶段总结/精简交接收尾。
 
-阶段仍在进行中：功能、源码/冻结/原生、安装包与本机安装/卸载验收已完成，Git/CI 交付待完成；不将本机结果提前计入远程 CI。
+功能、源码/冻结/原生、安装包与本机安装/卸载验收已完成。
+功能提交 `41fe4b522eca506da9b0db99d13f60c10d12eb3e` 已推送；
+[Windows CI 34426091682](https://github.com/Johnxcloudy/spatial-analysis/actions/runs/34426091682)
+经公共 Actions 页面核对准确 SHA 与 Success，job `102711521833` 成功。
+详细边界见 [验收记录](docs/verification-phase-1d.md)，收尾文档使用 `[skip ci]`。
 
 ## 后续阶段
 
 - Phase 1C：已完成，见 [实施计划](docs/superpowers/plans/2026-09-09-phase-1c.md) 与 [范围约束](docs/phase-1c.md)。
-- Phase 1D：项目另存/重新定位、跨格式回归与本机分发已完成，当前继续 Git/CI 交付收尾。
+- Phase 1D：项目另存/重新定位、跨格式回归、本机分发与功能提交 CI 已完成。
 - Phase 2：正式土地叠加、分类面积与成果导出。
 - Phase 3：完整任务取消、恢复、大样本性能和发布稳定性。
 - Phase 4A：土地利用成果制图，主题/图例/比例尺、Layout、PNG/PDF。

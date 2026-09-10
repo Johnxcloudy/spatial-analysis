@@ -1,7 +1,7 @@
 # Phase 1D: workspace portability and consolidation
 
-Status: implementation and local source/frozen/native/distribution acceptance
-completed on 2026-09-10. Git/CI delivery is in progress; see
+Status: delivered on 2026-09-10. Local source/frozen/native/distribution acceptance
+and Windows CI for pushed feature commit 41fe4b5 passed; see
 [verification evidence](verification-phase-1d.md).
 
 ## Scope

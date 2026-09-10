@@ -1,8 +1,8 @@
 # Phase 1D 验收记录
 
 日期：2026-09-10。应用 0.5.0、公开 RPC 5、项目 schema 5、worker 协议 4。
-功能、源码/最终冻结/原生工作流和本机分发已验收；Git/CI 正在收尾，未完成项
-不能据此视为通过。范围见 [Phase 1D](phase-1d.md)。全部使用合成样本。
+功能、源码/最终冻结/原生工作流、本机分发及对应功能提交的 Windows CI
+均已通过，阶段交付完成。范围见 [Phase 1D](phase-1d.md)。全部使用合成样本。
 
 ## 实现与审查
 
@@ -129,10 +129,29 @@ uninstallPassed/ok 均为 true。安装版引擎 EXE 哈希与已验收打包资
 新项目身份、内部父表和另存/重新定位任务均核对通过。随后卸载，临时目录、
 程序及注册项已移除；测试项目与报告位于安装目录外并保留。
 
-当前分支 `feat/phase-1a`，基线 HEAD/远程为
-`7165bb829e10aaa2e806332dbfa01fdd1677d71d`，Phase 1D 尚未提交/推送。
-Phase 1C 的成功 CI 不作为本阶段证据。对应功能提交 CI 在实际完成后补录。
-产物、项目和诊断文件不进入 Git。
+功能提交 `41fe4b522eca506da9b0db99d13f60c10d12eb3e` 已推送至
+`feat/phase-1a`，`git ls-remote` 确认远程 SHA 一致；推送后工作区干净。
+Phase 1C 的成功 CI 不作为本阶段证据。公共 GitHub REST 曾出现共享 IP
+限流，改用公共 Actions HTML 核对完整提交链接、工作流状态及 job。
+[Windows CI #8 / 34426091682](https://github.com/Johnxcloudy/spatial-analysis/actions/runs/34426091682)
+于 2026-09-10 01:47:51 UTC 核查为 `completed` / `success`，job
+`102711521833` 标记 `completed successfully`，页面耗时 11m 31s。
+公开未登录页面没有完整步骤日志，不据此宣称逐步检查数量。安全状态、
+原始页面与其 SHA-256 见 `.artifacts/ci-phase1d.json`；root 再次验证页面
+哈希和完整 commit 链接一致。产物、项目和诊断不进入 Git。
+
+公开页面同时显示已上传归档 `10132968139`，名称为
+`spatial-analysis-windows-41fe4b522eca506da9b0db99d13f60c10d12eb3e`，
+显示大小 326 MB，归档摘要为
+`sha256:1093e6b78a570e9636a39c54eae9c241eb190f4a5bd38f32d47fc6e5afca227e`。
+没有下载该归档；这不是本地 NSIS 的 SHA-256，不能混用。分支 Actions
+列表也独立显示同一完整提交和成功状态，页面快照保存在上述证据索引中。
+
+收尾只更新文档，完成事实复核与 `git diff --check`，不重复已通过的应用
+测试。最终文档提交使用 `[skip ci]`，上述 CI 对应功能代码提交，不泛指
+文档提交。可用 `git log -1 --grep="docs: close Phase 1D delivery"` 定位
+收尾提交；恢复时重查 HEAD、工作区和远程。测试用原生进程与 Vite 服务
+均已结束，安装测试程序/注册项已清理，验收项目和证据保留。
 
 ## 未覆盖范围
 

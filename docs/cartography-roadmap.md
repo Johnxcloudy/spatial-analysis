@@ -2,7 +2,7 @@
 
 更新日期：2026-09-10；原规划日期：2026-09-09。
 
-状态：依据用户提供的“GIS 制图与成果输出”和“程序规则 + Agent/Skill”两份材料维护路线图。Phase 1D 的 CART-00 契约草案和独立渲染探针已完成本机实验；产品 Layout、正式制图导出和 Agent 尚未实现。应用 0.5.0 的本机分发验收与 Git/CI 交付仍在进行，当前范围和阶段进度见 [Phase 1D](phase-1d.md) 与 [验证记录](verification-phase-1d.md)。
+状态：依据用户提供的“GIS 制图与成果输出”和“程序规则 + Agent/Skill”两份材料维护路线图。Phase 1D 的 CART-00 契约草案和独立渲染探针已完成本机实验；产品 Layout、正式制图导出和 Agent 尚未实现。应用 0.5.0 的本机分发验收和对应功能提交的 Windows CI 均通过；当前范围与证据见 [Phase 1D](phase-1d.md) 和 [验证记录](verification-phase-1d.md)。
 
 ## 1. 采用方向与优先级
 
