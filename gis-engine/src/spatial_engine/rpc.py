@@ -11,7 +11,6 @@ from .resources import configure_native_data_paths
 from .runtime import runtime_info
 from .tasks import TaskManager
 from .workspace import WorkspaceStore
-from . import tables, vector_queries, vectors
 from .validation import require_exact_keys, require_object
 
 ALLOWED_METHODS = {
@@ -22,6 +21,9 @@ ALLOWED_METHODS = {
     "project.saveAs",
     "project.close",
     "diagnostics.run",
+    "analysis.run",
+    "analysis.result",
+    "analysis.exportCsv",
     "source.inspect",
     "source.status",
     "source.relocate",
@@ -56,6 +58,7 @@ class Engine:
         self.projects = ProjectStore()
         self.workspace = WorkspaceStore(self.projects)
         self.tasks = TaskManager(self.projects, self.workspace)
+        self.queries = None
         self.logger.info("Engine started")
 
     def dispatch(self, method: str, params: Any) -> Any:
@@ -84,23 +87,36 @@ class Engine:
         if method == "diagnostics.run":
             return run_diagnostics(values)
         if method == "source.inspect":
-            return vectors.inspect_source(values)
+            require_exact_keys(values, {"sourcePath", "encoding"})
+            return self._query(method, {"params": values})
         if method == "source.status":
             return self.workspace.source_status(values)
         if method == "source.relocate":
             return self.tasks.start_relocation(values)
         if method == "table.inspect":
-            return tables.inspect_table(values)
+            require_exact_keys(values, {"sourcePath", "encoding", "delimiter", "sheet", "headerRow"})
+            return self._query(method, {"params": values})
         if method == "raster.inspect":
             require_exact_keys(values, {"sourcePath"})
-            from .rasters import inspect_raster
-            return inspect_raster(values)
+            return self._query(method, {"params": values})
         if method == "workspace.get":
             self.projects.active_path(values.get("path"))
             self.tasks.harvest()
             return self.workspace.get(values)
         if method == "vector.import":
             return self.tasks.start_import(values)
+        if method == "analysis.run":
+            return self.tasks.start_analysis(values)
+        if method == "analysis.exportCsv":
+            return self.tasks.start_export(values, statistics=True)
+        if method == "analysis.result":
+            require_exact_keys(values, {"path", "datasetId", "offset", "limit"})
+            dataset = self.workspace.dataset(values.get("path"), values.get("datasetId"))
+            self._require_dataset_kind(dataset, "vector")
+            from .portability import analysis_parents
+            analysis_parents(self.workspace, values["path"], dataset)
+            return self._query(method, {"dataset": dataset, "managedPath": str(self.workspace.managed_path(dataset)),
+                                       "params": {"offset": values["offset"], "limit": values["limit"]}})
         if method == "table.import":
             return self.tasks.start_table_import(values)
         if method == "table.points":
@@ -118,9 +134,7 @@ class Engine:
             require_exact_keys(values, {"path", "datasetId", *query_keys})
             dataset = self.workspace.dataset(values.get("path"), values.get("datasetId"))
             self._require_dataset_kind(dataset, "raster")
-            from . import rasters
-            query = rasters.render if method == "raster.render" else rasters.sample
-            return query(dataset, self.workspace.managed_path(dataset), values)
+            return self._query(method, {"dataset": dataset, "managedPath": str(self.workspace.managed_path(dataset)), "params": values})
         if method == "task.get":
             return self.tasks.get(values)
         if method == "task.cancel":
@@ -134,12 +148,7 @@ class Engine:
         if method == "layer.remove":
             self.tasks.require_mutation_allowed()
             return self.workspace.remove_layer(values)
-        queries = {
-            "vector.page": vector_queries.attribute_page,
-            "table.page": vector_queries.attribute_page,
-            "vector.viewport": vector_queries.viewport,
-            "vector.feature": vector_queries.feature,
-        }
+        queries = {"vector.page", "table.page", "vector.viewport", "vector.feature"}
         if method in queries:
             keys = {
                 "vector.page": {"path", "datasetId", "offset", "limit", "sortField", "descending", "filter"},
@@ -150,8 +159,14 @@ class Engine:
             require_exact_keys(values, keys[method])
             dataset = self.workspace.dataset(values.get("path"), values.get("datasetId"))
             self._require_dataset_kind(dataset, method.split(".")[0])
-            return queries[method](dataset, self.workspace.managed_path(dataset), values)
+            return self._query(method, {"dataset": dataset, "managedPath": str(self.workspace.managed_path(dataset)), "params": values})
         raise MethodNotFoundError()
+
+    def _query(self, operation: str, payload: dict) -> dict:
+        if self.queries is None:
+            from .query_runner import QueryRunner
+            self.queries = QueryRunner()
+        return self.queries.execute(operation, payload)
 
     @staticmethod
     def _require_dataset_kind(dataset: dict, kind: str) -> None:
@@ -159,6 +174,9 @@ class Engine:
             raise DomainError(f"This operation requires a {kind} dataset", kind="invalid_dataset_kind")
 
     def close(self) -> None:
+        if self.queries is not None:
+            self.queries.close()
+            self.queries = None
         self.tasks.close()
         self.projects.close()
 

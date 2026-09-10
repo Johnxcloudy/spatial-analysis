@@ -295,10 +295,11 @@ def _row_to_task(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def _sha256(path: Path) -> tuple[int, str]:
+    from .recovery import recovery_hash_read
     digest = hashlib.sha256()
     size = 0
     with path.open("rb") as handle:
-        while chunk := handle.read(1024 * 1024):
+        while chunk := recovery_hash_read(handle):
             size += len(chunk)
             digest.update(chunk)
     return size, digest.hexdigest()
@@ -308,6 +309,7 @@ class WorkspaceStore:
     def __init__(self, projects: ProjectStore) -> None:
         self.projects = projects
         self._recovered_session: ProjectSession | None = None
+        self._recovery = None
 
     def _path(self, path: Any) -> Path:
         return self.projects.active_path(path)
@@ -497,7 +499,7 @@ class WorkspaceStore:
     def create_task(
         self, kind: str, *, task_id: str | None = None, dataset_id: str | None = None, destination: str | None = None
     ) -> dict[str, Any]:
-        if kind not in {"import", "export", "points", "save_as", "relocate"}:
+        if kind not in {"import", "export", "points", "save_as", "relocate", "analysis"}:
             raise InvalidParamsError("task kind is invalid")
         task_id = task_id or str(uuid.uuid4())
         _uuid_string(task_id, "task id")
@@ -558,19 +560,23 @@ class WorkspaceStore:
             row = connection.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
         return _row_to_task(row)
 
-    def prepare_import_publication(self, task_id: str, dataset: dict[str, Any], staged_path: Path) -> None:
+    def prepare_import_publication(self, task_id: str, dataset: dict[str, Any], staged_path: Path, *, proof=None) -> None:
         dataset, serialized = _validate_dataset(dataset)
         task = self.task(task_id)
-        if task["kind"] not in {"import", "points"} or task["status"] != "running" or task["datasetId"] != dataset["id"]:
+        if task["kind"] not in {"import", "points", "analysis"} or task["status"] != "running" or task["datasetId"] != dataset["id"]:
             raise DomainError("Import task does not match its result", kind="invalid_worker_result")
         if task["kind"] == "points" and dataset["kind"] != "vector":
             raise DomainError("Point task did not produce a vector dataset", kind="invalid_worker_result")
+        if task["kind"] == "analysis" and (dataset["kind"] != "vector" or dataset["source"]["driver"] != "SpatialAnalysis"):
+            raise DomainError("Analysis task did not produce an analysis result", kind="invalid_worker_result")
         root = self._project_root().resolve()
         staged = staged_path.resolve(strict=False)
         expected_parent = (root / "staging" / "tasks" / task_id).resolve(strict=False)
-        if staged.parent != expected_parent or not staged.is_file():
+        expected_name = "snapshot.tif" if dataset["kind"] == "raster" else "snapshot.gpkg"
+        if staged.parent != expected_parent or staged.name != expected_name or not staged.is_file():
             raise DomainError("Worker artifact path is invalid", kind="invalid_worker_result")
-        size, digest = _sha256(staged)
+        from .publication import check_proof
+        size, digest = _sha256(staged) if proof is None else check_proof(staged, proof)
         if dataset["version"].lower() != digest:
             raise DomainError("Dataset version does not match its artifact", kind="invalid_worker_result")
         staged_relative = staged.relative_to(root).as_posix()
@@ -584,7 +590,39 @@ class WorkspaceStore:
                 (task_id, serialized, staged_relative, dataset["relativePath"], size, digest),
             )
 
-    def complete_import_publication(self, task_id: str, *, recovering: bool = False) -> dict[str, Any]:
+    def validate_import_journal(self, pending):
+        from .capacity import MAX_SNAPSHOT_BYTES
+        task_id = pending["task_id"]
+        try:
+            if str(uuid.UUID(task_id)) != task_id:
+                raise ValueError("noncanonical task ID")
+            dataset, serialized = _validate_dataset(json.loads(pending["dataset_json"]))
+            task = self.task(task_id)
+            if (task["kind"] not in {"import", "points", "analysis"}
+                    or task["status"] not in {"running", "interrupted"}
+                    or task["datasetId"] != dataset["id"]):
+                raise ValueError("task binding mismatch")
+            if task["kind"] == "points" and dataset["kind"] != "vector":
+                raise ValueError("point result kind mismatch")
+            if task["kind"] == "analysis" and (dataset["kind"] != "vector" or dataset["source"]["driver"] != "SpatialAnalysis"):
+                raise ValueError("analysis result kind mismatch")
+            name = "snapshot.tif" if dataset["kind"] == "raster" else "snapshot.gpkg"
+            if (pending["staged_relative_path"] != f"staging/tasks/{task_id}/{name}"
+                    or pending["final_relative_path"] != dataset["relativePath"]
+                    or pending["artifact_sha256"] != dataset["version"]
+                    or type(pending["artifact_size"]) is not int
+                    or not 0 < pending["artifact_size"] <= MAX_SNAPSHOT_BYTES):
+                raise ValueError("artifact binding mismatch")
+            root = self._project_root().resolve()
+            staged = self._safe_project_relative(root, pending["staged_relative_path"], "staged artifact")
+            final = self._safe_project_relative(root, pending["final_relative_path"], "dataset artifact")
+            if staged.parent != root / "staging" / "tasks" / task_id:
+                raise ValueError("staged artifact escapes task directory")
+            return dataset, serialized, staged, final
+        except (ValueError, TypeError, KeyError) as exc:
+            raise DomainError("Import publication journal is invalid", kind="invalid_project", detail=str(exc)) from exc
+
+    def complete_import_publication(self, task_id: str, *, recovering: bool = False, proof=None) -> dict[str, Any]:
         path = self.projects.active_path(str(self.projects._session.path) if self.projects._session else "")
         with self._connect(path) as connection:
             pending = connection.execute(
@@ -592,18 +630,16 @@ class WorkspaceStore:
             ).fetchone()
         if pending is None:
             raise DomainError("Import publication is missing", kind="invalid_worker_result")
-        dataset = json.loads(pending["dataset_json"])
-        dataset, serialized = _validate_dataset(dataset)
-        root = self._project_root().resolve()
-        staged = self._safe_project_relative(root, pending["staged_relative_path"], "staged artifact")
-        final = self._safe_project_relative(root, pending["final_relative_path"], "dataset artifact")
+        dataset, serialized, staged, final = self.validate_import_journal(pending)
         expected_size = pending["artifact_size"]
         expected_digest = pending["artifact_sha256"]
         if final.exists():
-            if not recovering or not final.is_file() or _sha256(final) != (expected_size, expected_digest):
+            from .publication import check_proof
+            if not recovering or not final.is_file() or (_sha256(final) if proof is None else check_proof(final, proof)) != (expected_size, expected_digest):
                 raise DomainError("Dataset destination already exists", kind="publication_conflict", detail=str(final))
         else:
-            if not staged.is_file() or _sha256(staged) != (expected_size, expected_digest):
+            from .publication import check_proof
+            if not staged.is_file() or (_sha256(staged) if proof is None else check_proof(staged, proof)) != (expected_size, expected_digest):
                 raise DomainError("Staged dataset artifact is missing or changed", kind="invalid_worker_result")
             final.parent.mkdir(parents=True, exist_ok=True)
             try:
@@ -612,6 +648,8 @@ class WorkspaceStore:
                 raise DomainError("Dataset destination already exists", kind="publication_conflict", detail=str(final)) from exc
             except OSError as exc:
                 raise DomainError("Could not publish dataset", kind="publication_failed", detail=str(exc)) from exc
+        if proof is not None:
+            proof.lease.require_identity(final)
         timestamp = _utc_now()
         with self._connect(path) as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -692,7 +730,7 @@ class WorkspaceStore:
                 (task_id, str(temporary), str(destination), artifact_size, artifact_sha256.lower()),
             )
 
-    def complete_export_publication(self, task_id: str, *, recovering: bool = False) -> dict[str, Any]:
+    def complete_export_publication(self, task_id: str, *, recovering: bool = False, proof=None) -> dict[str, Any]:
         path = self.projects.active_path(str(self.projects._session.path) if self.projects._session else "")
         with self._connect(path) as connection:
             pending = connection.execute("SELECT * FROM pending_exports WHERE task_id = ?", (task_id,)).fetchone()
@@ -712,12 +750,14 @@ class WorkspaceStore:
             rasters._sidecars(destination)
         expected = (pending["artifact_size"], pending["artifact_sha256"])
         if destination.exists():
-            if not recovering or not destination.is_file() or _sha256(destination) != expected:
+            from .publication import check_proof
+            if not recovering or not destination.is_file() or (_sha256(destination) if proof is None else check_proof(destination, proof)) != expected:
                 raise DomainError("Export destination already exists", kind="destination_exists", detail=str(destination))
         else:
             if not temporary.is_file() or temporary.stat().st_size != expected[0]:
                 raise DomainError("Pending export is missing or changed", kind="invalid_worker_result")
-            if recovering and _sha256(temporary) != expected:
+            from .publication import check_proof
+            if (recovering and proof is None and _sha256(temporary) != expected) or (proof is not None and check_proof(temporary, proof) != expected):
                 raise DomainError("Pending export is missing or changed", kind="invalid_worker_result")
             try:
                 self._rename_no_replace(temporary, destination)
@@ -725,6 +765,8 @@ class WorkspaceStore:
                 raise DomainError("Export destination already exists", kind="destination_exists", detail=str(destination)) from exc
             except OSError as exc:
                 raise DomainError("Could not publish export", kind="export_failed", detail=str(exc)) from exc
+        if proof is not None:
+            proof.lease.require_identity(destination)
         timestamp = _utc_now()
         with self._connect(path) as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -740,6 +782,42 @@ class WorkspaceStore:
         if session is None:
             raise DomainError("No project is active", kind="project_not_active")
         if self._recovered_session is session:
+            if self._recovery is not None:
+                self._recovery.tick()
+            return
+        from .recovery import RecoveryCoordinator, INLINE_RECOVERY_BYTES, INLINE_HASH_REMAINING
+        coordinator = RecoveryCoordinator(self)
+        if coordinator.total_bytes <= INLINE_RECOVERY_BYTES and not coordinator.errors:
+            token = INLINE_HASH_REMAINING.set(INLINE_RECOVERY_BYTES)
+            try:
+                self._recover_inline()
+            finally:
+                INLINE_HASH_REMAINING.reset(token)
+            return
+        self.interrupt_running_tasks()
+        self._cleanup_unjournaled()
+        self._recovered_session = session
+        self._recovery = coordinator
+        self._recovery.tick()
+
+    @property
+    def recovery_active(self) -> bool:
+        return self._recovery is not None and self._recovery.active
+
+    def cancel_recovery(self, task_id: str):
+        return self._recovery.cancel(task_id) if self._recovery is not None else None
+
+    def close_recovery(self) -> None:
+        if self._recovery is not None:
+            self._recovery.close()
+            self._recovery = None
+            self._recovered_session = None
+
+    def _recover_inline(self) -> None:
+        session = self.projects._session
+        if session is None:
+            raise DomainError("No project is active", kind="project_not_active")
+        if self._recovered_session is session:
             return
         path = session.path
         from .portability import recover_copies
@@ -751,14 +829,7 @@ class WorkspaceStore:
                 self.complete_import_publication(task_id, recovering=True)
                 self._cleanup_task_directory(task_id)
             except DomainError as exc:
-                if exc.kind == "publication_failed":
-                    self.update_task(
-                        task_id, status="interrupted", stage="publication_pending", error=exc.message
-                    )
-                else:
-                    self.discard_pending(task_id)
-                    self.update_task(task_id, status="interrupted", stage="interrupted", error=exc.message)
-                    self._cleanup_task_directory(task_id)
+                self.update_task(task_id, status="interrupted", stage="publication_pending", error=exc.message)
         with self._connect(path) as connection:
             export_task_ids = [row[0] for row in connection.execute("SELECT task_id FROM pending_exports")]
         for task_id in export_task_ids:
@@ -766,15 +837,13 @@ class WorkspaceStore:
                 self.complete_export_publication(task_id, recovering=True)
                 self._cleanup_task_directory(task_id)
             except DomainError as exc:
-                if exc.kind in {"export_failed", "external_raster_dependencies", "publication_failed"}:
-                    self.update_task(
-                        task_id, status="interrupted", stage="publication_pending", error=exc.message
-                    )
-                else:
-                    self._remove_pending_export_from_journal(task_id)
-                    self.discard_pending(task_id)
-                    self.update_task(task_id, status="interrupted", stage="interrupted", error=exc.message)
-                    self._cleanup_task_directory(task_id)
+                self.update_task(task_id, status="interrupted", stage="publication_pending", error=exc.message)
+        self._cleanup_unjournaled()
+        self.interrupt_running_tasks()
+        self._recovered_session = session
+
+    def _cleanup_unjournaled(self) -> None:
+        path = self.projects._session.path
         with self._connect(path) as connection:
             unjournaled = connection.execute(
                 "SELECT task_id, kind, destination FROM tasks WHERE "
@@ -785,8 +854,6 @@ class WorkspaceStore:
         for row in unjournaled:
             if row["kind"] != "export" or self._remove_owned_export_pending(row["task_id"], row["destination"]):
                 self._cleanup_task_directory(row["task_id"])
-        self.interrupt_running_tasks()
-        self._recovered_session = session
 
     def interrupt_running_tasks(self) -> None:
         session = self.projects._session

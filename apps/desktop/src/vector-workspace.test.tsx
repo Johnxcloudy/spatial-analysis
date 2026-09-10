@@ -12,7 +12,7 @@ vi.mock('./components/VectorMap', () => ({
   VectorMap: ({ onSelect, selected, fitRequest, initialView, onViewChange }: { onSelect: (layer: string, id: string) => void; selected: FeatureResult | null; fitRequest: FitRequest | null; initialView: ViewState; onViewChange: (view: ViewState) => void }) => <div><button onClick={() => onSelect('layer-2', '2')}>Select second map layer</button><button onClick={() => onViewChange({ center: [110, 30], zoom: 7 })}>Pan map</button><span data-testid="highlight">{selected?.row.id ?? ''}</span><span data-testid="map-fit">{fitRequest?.key ?? ''}</span><span data-testid="initial-view">{JSON.stringify(initialView)}</span></div>,
 }));
 
-const project: Project = { id: 'project-1', name: 'Vector test', description: '', schemaVersion: 5, createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z', projectPath: 'C:/test/project.spa', analysisCrs: null, displayCrs: 'EPSG:3857', viewState: { center: [114, 27], zoom: 5 } };
+const project: Project = { id: 'project-1', name: 'Vector test', description: '', schemaVersion: 6, createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z', projectPath: 'C:/test/project.spa', analysisCrs: null, displayCrs: 'EPSG:3857', viewState: { center: [114, 27], zoom: 5 } };
 const dataset: VectorDataset = {
   id: 'dataset-1', version: 'version-1', name: 'Land', kind: 'vector',
   source: { path: 'C:/test/land.gpkg', layer: 'land', driver: 'GPKG', fingerprint: 'fixture', encoding: null, assignedCrs: null, crsWkt: 'fixture-crs', metadata: {} },
@@ -36,7 +36,7 @@ function deferred<T>() {
 function fixtureBridge(request: DesktopBridge['request']): DesktopBridge {
   return {
     available: () => true, request, chooseParent: vi.fn(async () => 'C:/test'), chooseProject: vi.fn(async () => project.projectPath),
-    chooseVector: vi.fn(async () => 'C:/test/land.gpkg'), chooseGdb: vi.fn(async () => 'C:/test/land.gdb'), chooseExport: vi.fn(async () => 'C:/test/export.gpkg'),
+    chooseVector: vi.fn(async () => 'C:/test/land.gpkg'), chooseGdb: vi.fn(async () => 'C:/test/land.gdb'), chooseCsvExport: vi.fn(async () => 'C:/test/statistics.csv'), chooseExport: vi.fn(async () => 'C:/test/export.gpkg'),
     selectTableSource: vi.fn(async () => 'C:/test/points.csv'),
     chooseSource: vi.fn(async () => 'C:/test/moved.gpkg'), chooseRaster: vi.fn(async () => 'C:/test/image.tif'), chooseRasterExport: vi.fn(async () => 'C:/test/export.tif'),
     join: vi.fn(async (...parts) => parts.join('/')), diagnosticDirectory: vi.fn(async () => 'C:/test/cache'), onClose: vi.fn(async () => () => undefined), closeWindow: vi.fn(async () => undefined),
@@ -54,7 +54,8 @@ describe('vector query consistency', () => {
     const { result, rerender } = renderHook(({ offset }) => useAttributePage(bridge, project.projectPath, dataset, { ...initialAttributeQuery, offset }, true, onFailure), { initialProps: { offset: 0 } });
     rerender({ offset: 200 });
     await act(async () => newer.resolve(pageFor(dataset.id, 200)));
-    expect(result.current.page?.offset).toBe(200);
+    expect(result.current.page).toBeNull();
+    expect(request).toHaveBeenCalledTimes(1);
     await act(async () => older.resolve(pageFor(dataset.id, 0)));
     expect(result.current.page?.offset).toBe(200);
     expect(onFailure).not.toHaveBeenCalled();
@@ -104,7 +105,7 @@ describe('vector query consistency', () => {
 async function openWorkspace(deferredSecond?: ReturnType<typeof deferred<FeatureResult>>, fitRequest: FitRequest | null = null) {
   const request = vi.fn(async (method: string, params: Record<string, unknown> = {}) => {
     switch (method) {
-      case 'runtime.info': return { protocolVersion: 5, engineVersion: '0.5.0', pythonVersion: 'test', packaged: false, versions: {}, drivers: {}, logPath: 'test' };
+      case 'runtime.info': return { protocolVersion: 6, engineVersion: '0.5.0', pythonVersion: 'test', packaged: false, versions: {}, drivers: {}, logPath: 'test' };
       case 'project.open': return project;
       case 'workspace.get': return workspace;
       case 'vector.page':
@@ -152,10 +153,17 @@ describe('map and attribute selection', () => {
     expect(setQuery).toHaveBeenLastCalledWith({ ...initialAttributeQuery, offset: 2 });
   });
 
+  it('jumps directly to a bounded final page for 500000 records', () => {
+    const setQuery = vi.fn();
+    render(<AttributeTable dataset={dataset} page={{ ...pageFor(), total: 500000, hasMore: true }} loading={false} query={initialAttributeQuery} setQuery={setQuery} selectedId={null} selected={null} onSelect={vi.fn()} onClear={vi.fn()} enabled />);
+    fireEvent.click(screen.getByRole('button', { name: '属性末页' }));
+    expect(setQuery).toHaveBeenCalledWith({ ...initialAttributeQuery, offset: 499800 });
+  });
+
   it('keeps the clicked feature when the map changes the selected layer', async () => {
     const { request } = await openWorkspace();
     fireEvent.click(await screen.findByRole('button', { name: 'Select second map layer' }));
-    await waitFor(() => expect(request).toHaveBeenCalledWith('vector.feature', { path: project.projectPath, datasetId: secondDataset.id, featureId: '2' }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith('vector.feature', { path: project.projectPath, datasetId: secondDataset.id, featureId: '2' }, expect.any(AbortSignal)));
     expect(await screen.findByText('选中 ID：2')).toBeTruthy();
     await waitFor(() => expect(screen.getByTestId('highlight').textContent).toBe('2'));
   });

@@ -5,6 +5,7 @@ import math
 import struct
 import uuid
 import warnings
+from contextlib import ExitStack
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
@@ -17,9 +18,8 @@ from pyproj import CRS, Transformer
 
 from .errors import DomainError, InvalidParamsError
 from .validation import require_crs, require_exact_keys, require_path, require_string
+from .capacity import MAX_FEATURES, MAX_VERTICES, MAX_GEOMETRY_VERTICES, MAX_SNAPSHOT_BYTES
 
-MAX_FEATURES = 100_000
-MAX_VERTICES = 2_000_000
 MAX_FIELDS = 256
 MAX_LAYERS = 512
 BATCH_SIZE = 2_048
@@ -207,8 +207,75 @@ def canonical_value(value):
     return value
 
 
-def verify_snapshot(path: Path, dataset: dict, expected: pa.Table | None = None, geometry_name: str | None = None, cancelled=lambda: False) -> None:
+class _ExpectedRows:
+    """Read the expected conversion stream without depending on GDAL batch boundaries."""
+    def __init__(self, expected, stack):
+        if isinstance(expected, Path):
+            stream = stack.enter_context(expected.open("rb"))
+            self.reader = pa.ipc.open_file(stream)
+            self.schema = self.reader.schema
+            self.batches = (self.reader.get_batch(i) for i in range(self.reader.num_record_batches))
+        else:
+            self.schema = expected.schema
+            self.batches = iter(expected.to_batches(max_chunksize=BATCH_SIZE))
+        self.pending = None
+
+    def take(self, count):
+        pieces = []
+        while count:
+            if self.pending is None or not len(self.pending):
+                self.pending = next(self.batches, None)
+                if self.pending is None:
+                    raise DomainError("Snapshot gained records during conversion", kind="roundtrip_failed")
+            size = min(count, len(self.pending))
+            pieces.append(self.pending.slice(0, size))
+            self.pending = self.pending.slice(size)
+            count -= size
+        return pa.Table.from_batches(pieces, schema=self.schema)
+
+    def exhausted(self):
+        return (self.pending is None or not len(self.pending)) and not any(len(batch) for batch in self.batches)
+
+
+def _verify_schema(dataset, schema, expected_schema):
+    for field in dataset["fields"]:
+        stored = schema.field(field["name"])
+        if expected_schema is not None:
+            source = expected_schema.field(field["name"])
+            if not _compatible_storage_type(source.type, stored.type):
+                raise DomainError("Snapshot field type changed during conversion", kind="roundtrip_failed", detail=field["name"])
+            if source.type != stored.type or source.nullable != stored.nullable:
+                dataset["report"]["warnings"].append(f"Storage schema changed for {field['name']}: {source.type}/{source.nullable} -> {stored.type}/{stored.nullable}; values and NULLs were verified.")
+            field["storageType"], field["nullable"] = str(stored.type), stored.nullable
+        elif str(stored.type) != field["storageType"] or stored.nullable != field["nullable"]:
+            raise DomainError("Snapshot field schema does not match registered metadata", kind="roundtrip_failed", detail=field["name"])
+
+
+def _merge_bounds(bounds, geometries):
+    finite = shapely.bounds(geometries[~shapely.is_missing(geometries) & ~shapely.is_empty(geometries)])
+    if not len(finite):
+        return bounds
+    part = [float(finite[:, 0].min()), float(finite[:, 1].min()), float(finite[:, 2].max()), float(finite[:, 3].max())]
+    return part if bounds is None else [min(bounds[0], part[0]), min(bounds[1], part[1]), max(bounds[2], part[2]), max(bounds[3], part[3])]
+
+
+def _compare_batch(actual, expected, geometries, geometry_name, cancelled):
+    for column in expected.column_names:
+        _cancel(cancelled)
+        if geometries is not None and column == geometry_name:
+            original = _decode_geometry(expected[column].to_pylist())
+            matches = shapely.equals_exact(original, geometries, tolerance=0.0)
+            matches |= shapely.is_missing(original) & shapely.is_missing(geometries)
+            if not np.all(matches):
+                raise DomainError("Snapshot geometry changed during conversion", kind="roundtrip_failed")
+        elif column not in actual.column_names or [canonical_value(v) for v in expected[column].to_pylist()] != [canonical_value(v) for v in actual[column].to_pylist()]:
+            raise DomainError("Snapshot attributes changed during conversion", kind="roundtrip_failed", detail=column)
+
+
+def verify_snapshot(path: Path, dataset: dict, expected: pa.Table | Path | None = None, geometry_name: str | None = None, cancelled=lambda: False) -> None:
     _cancel(cancelled)
+    if path.stat().st_size > MAX_SNAPSHOT_BYTES:
+        raise DomainError("Snapshot exceeds the 512 MiB budget", kind="source_limit")
     is_table = dataset.get("kind") == "table"
     if expected is None and _content_hash(path, cancelled) != dataset["version"]:
         raise DomainError("Managed snapshot changed after import", kind="snapshot_changed")
@@ -220,50 +287,36 @@ def verify_snapshot(path: Path, dataset: dict, expected: pa.Table | None = None,
     if dataset["crsWkt"]:
         if not info["crs"] or not CRS.from_user_input(info["crs"]).equals(CRS.from_user_input(dataset["crsWkt"])):
             raise DomainError("Snapshot CRS did not round trip", kind="roundtrip_failed")
-    meta, actual = pyogrio.read_arrow(path, layer=dataset["storageLayer"])
-    actual_geometry = meta["geometry_name"] or "wkb_geometry"
     expected_fields = {field["name"] for field in dataset["fields"]} | {dataset["internalIdField"], dataset["sourceFidField"]}
     if set(info["fields"]) != expected_fields:
         raise DomainError("Snapshot fields do not match registered metadata", kind="roundtrip_failed")
-    for field in dataset["fields"]:
-        stored = actual.schema.field(field["name"])
-        if expected is not None:
-            source = expected.schema.field(field["name"])
-            if not _compatible_storage_type(source.type, stored.type):
-                raise DomainError("Snapshot field type changed during conversion", kind="roundtrip_failed", detail=field["name"])
-            if source.type != stored.type or source.nullable != stored.nullable:
-                dataset["report"]["warnings"].append(f"Storage schema changed for {field['name']}: {source.type}/{source.nullable} -> {stored.type}/{stored.nullable}; values and NULLs were verified.")
-            field["storageType"], field["nullable"] = str(stored.type), stored.nullable
-        elif str(stored.type) != field["storageType"] or stored.nullable != field["nullable"]:
-            raise DomainError("Snapshot field schema does not match registered metadata", kind="roundtrip_failed", detail=field["name"])
+    count, bounds = 0, None
+    with ExitStack() as stack:
+        expected_rows = _ExpectedRows(expected, stack) if expected is not None else None
+        meta, reader = stack.enter_context(pyogrio.open_arrow(path, layer=dataset["storageLayer"], batch_size=BATCH_SIZE, use_pyarrow=True))
+        _verify_schema(dataset, reader.schema, expected_rows.schema if expected_rows else None)
+        if not pa.types.is_string(reader.schema.field(dataset["sourceFidField"]).type):
+            raise DomainError("Snapshot source FID mapping is invalid", kind="roundtrip_failed")
+        for batch in reader:
+            _cancel(cancelled)
+            actual = pa.Table.from_batches([batch])
+            if actual[dataset["internalIdField"]].to_pylist() != [str(count + i + 1) for i in range(len(batch))]:
+                raise DomainError("Snapshot feature identities are invalid", kind="roundtrip_failed")
+            count += len(batch)
+            geometries = None if is_table else _decode_geometry(actual[meta["geometry_name"] or "wkb_geometry"].to_pylist())
+            if geometries is not None:
+                bounds = _merge_bounds(bounds, geometries)
+            if expected_rows:
+                _compare_batch(actual, expected_rows.take(len(batch)), geometries, geometry_name, cancelled)
+        if expected_rows and not expected_rows.exhausted():
+            raise DomainError("Snapshot lost records during conversion", kind="roundtrip_failed")
+    if count != dataset["featureCount"] or bounds != dataset["bounds"]:
+        raise DomainError("Snapshot count or bounds do not match registered metadata", kind="roundtrip_failed")
     if is_table:
         if any(dataset[key] is not None for key in ("geometryType", "crsWkt", "crsAuthority", "bounds", "boundsWgs84")) or info["crs"]:
             raise DomainError("Nonspatial table unexpectedly has geometry or CRS metadata", kind="roundtrip_failed")
         from .tables import verify_table_auxiliary
         verify_table_auxiliary(path, dataset, cancelled=cancelled)
-    else:
-        actual_geometries = _decode_geometry(actual[actual_geometry].to_pylist())
-        finite = shapely.bounds(actual_geometries[~shapely.is_missing(actual_geometries) & ~shapely.is_empty(actual_geometries)])
-        actual_bounds = [float(finite[:, 0].min()), float(finite[:, 1].min()), float(finite[:, 2].max()), float(finite[:, 3].max())] if len(finite) else None
-        if actual_bounds != dataset["bounds"]:
-            raise DomainError("Snapshot bounds do not match registered metadata", kind="roundtrip_failed")
-    ids = actual[dataset["internalIdField"]].to_pylist()
-    if ids != [str(index + 1) for index in range(dataset["featureCount"])]:
-        raise DomainError("Snapshot feature identities are invalid", kind="roundtrip_failed")
-    if not pa.types.is_string(actual[dataset["sourceFidField"]].type):
-        raise DomainError("Snapshot source FID mapping is invalid", kind="roundtrip_failed")
-    if expected is not None:
-        for column in expected.column_names:
-            _cancel(cancelled)
-            if not is_table and column == geometry_name:
-                expected_geometries = _decode_geometry(expected[column].to_pylist())
-                matches = shapely.equals_exact(expected_geometries, actual_geometries, tolerance=0.0)
-                matches |= shapely.is_missing(expected_geometries) & shapely.is_missing(actual_geometries)
-                if not np.all(matches):
-                    raise DomainError("Snapshot geometry changed during conversion", kind="roundtrip_failed")
-            else:
-                if column not in actual.column_names or [canonical_value(v) for v in expected[column].to_pylist()] != [canonical_value(v) for v in actual[column].to_pylist()]:
-                    raise DomainError("Snapshot attributes changed during conversion", kind="roundtrip_failed", detail=column)
 
 
 def import_vector(payload: dict, work_dir: Path, progress, cancelled) -> dict:
@@ -297,12 +350,21 @@ def import_vector(payload: dict, work_dir: Path, progress, cancelled) -> dict:
     id_field, source_fid_field = _unique_name("_sa_id", names), _unique_name("_sa_source_fid", names)
     output_geometry = _unique_name("_sa_geometry", names)
     counts = {"features": 0, "vertices": 0, "invalid": 0, "empty": 0, "missing": 0, "duplicateGeometry": 0}
-    batches, seen = [], set()
+    seen = set()
+    work_dir.mkdir(parents=True, exist_ok=True)
+    artifact = (work_dir / "snapshot.gpkg").resolve()
+    expected_path = work_dir / "expected.arrow"
+    if artifact.exists() or expected_path.exists():
+        raise DomainError("Snapshot destination already exists", kind="destination_exists")
+    fid_storage = _unique_name("_sa_fid", names)
+    wrote = False
     bounds = None
     fields = matching["fields"]
     try:
-        with warnings.catch_warnings(record=True) as caught:
+        with ExitStack() as stack, warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
+            expected_stream = stack.enter_context(expected_path.open("xb"))
+            expected_writer = None
             with pyogrio.open_arrow(path, layer=layer, encoding=encoding, return_fids=True, batch_size=BATCH_SIZE, use_pyarrow=True) as (meta, reader):
                 geometry_name = meta["geometry_name"] or "wkb_geometry"
                 fid_name = meta["fid_column"]
@@ -317,9 +379,10 @@ def import_vector(payload: dict, work_dir: Path, progress, cancelled) -> dict:
                     geometries = _decode_geometry(batch[geometry_name].to_pylist())
                     start = counts["features"]
                     counts["features"] += len(batch)
-                    counts["vertices"] += int(np.sum(shapely.get_num_coordinates(geometries)))
-                    if counts["features"] > MAX_FEATURES or counts["vertices"] > MAX_VERTICES:
-                        raise DomainError("Source exceeds 100000 features or 2000000 vertices", kind="source_limit")
+                    vertex_counts = shapely.get_num_coordinates(geometries)
+                    counts["vertices"] += int(np.sum(vertex_counts))
+                    if counts["features"] > MAX_FEATURES or counts["vertices"] > MAX_VERTICES or np.any(vertex_counts > MAX_GEOMETRY_VERTICES):
+                        raise DomainError("Source exceeds feature, total vertex or single-geometry budget", kind="source_limit")
                     missing, empty = shapely.is_missing(geometries), shapely.is_empty(geometries)
                     counts["missing"] += int(np.sum(missing))
                     counts["empty"] += int(np.sum(empty))
@@ -342,29 +405,29 @@ def import_vector(payload: dict, work_dir: Path, progress, cancelled) -> dict:
                     table = table.append_column(id_field, pa.array([str(start + index + 1) for index in range(len(batch))]))
                     table = table.append_column(source_fid_field, pa.array([str(value) if value is not None else None for value in batch[fid_name].to_pylist()], type=pa.string()))
                     table = table.append_column(output_geometry, batch[geometry_name])
-                    batches.append(table)
+                    if expected_writer is None:
+                        expected_writer = stack.enter_context(pa.ipc.new_file(expected_stream, table.schema))
+                    expected_writer.write_table(table)
+                    pyogrio.write_arrow(table, artifact, layer="features", driver="GPKG", geometry_name=output_geometry,
+                        geometry_type=matching["geometryType"], crs=crs_wkt, append=wrote,
+                        layer_options=None if wrote else {"SPATIAL_INDEX": "YES", "GEOMETRY_NAME": output_geometry, "FID": fid_storage})
+                    wrote = True
+                    if artifact.stat().st_size > MAX_SNAPSHOT_BYTES:
+                        raise DomainError("Snapshot exceeds the 512 MiB budget", kind="source_limit")
                     progress("reading", counts["features"], matching["featureCount"])
-                if not batches:
+                if not wrote:
                     table = pa.Table.from_batches([], schema=schema).select(source_fields)
                     table = table.append_column(id_field, pa.array([], type=pa.string())).append_column(source_fid_field, pa.array([], type=pa.string()))
                     table = table.append_column(output_geometry, pa.array([], type=pa.binary()))
-                    batches.append(table)
+                    expected_writer = stack.enter_context(pa.ipc.new_file(expected_stream, table.schema))
+                    pyogrio.write_arrow(table, artifact, layer="features", driver="GPKG", geometry_name=output_geometry,
+                        geometry_type=matching["geometryType"], crs=crs_wkt,
+                        layer_options={"SPATIAL_INDEX": "YES", "GEOMETRY_NAME": output_geometry, "FID": fid_storage})
             warning_text = [str(item.message) for item in caught]
         if any(any(term in item.lower() for term in ("measured", "curve", "lineariz", "3d", "unsupported", "convert")) for item in warning_text):
             raise DomainError("Source driver reported a potentially lossy conversion", kind="unsupported_geometry", detail="; ".join(warning_text))
-        table = pa.concat_tables(batches)
-        work_dir.mkdir(parents=True, exist_ok=True)
-        artifact = (work_dir / "snapshot.gpkg").resolve()
-        if artifact.exists():
-            raise DomainError("Snapshot destination already exists", kind="destination_exists")
         progress("writing", counts["features"], counts["features"])
         _cancel(cancelled)
-        with warnings.catch_warnings(record=True) as write_warnings:
-            warnings.simplefilter("always")
-            pyogrio.write_arrow(table, artifact, layer="features", driver="GPKG", geometry_name=output_geometry,
-                                geometry_type=matching["geometryType"], crs=crs_wkt,
-                                layer_options={"SPATIAL_INDEX": "YES", "GEOMETRY_NAME": output_geometry, "FID": _unique_name("_sa_fid", names)})
-        warning_text.extend(str(item.message) for item in write_warnings)
         projected_bounds = wgs84_bounds(bounds, crs_wkt)
         restricted = crs_wkt is None or (bounds is not None and projected_bounds is None) or any(counts[key] for key in ("missing", "empty", "invalid"))
         dataset = {"id": dataset_id, "version": str(uuid.uuid4()), "name": layer, "kind": "vector",
@@ -389,7 +452,8 @@ def import_vector(payload: dict, work_dir: Path, progress, cancelled) -> dict:
         if inspection["driver"] == "GeoJSON":
             dataset["report"]["warnings"].append("GeoJSON field types are inferred by GDAL; nested JSON objects and arrays are rejected by this importer.")
         progress("validating", counts["features"], counts["features"])
-        verify_snapshot(artifact, dataset, table, output_geometry, cancelled)
+        verify_snapshot(artifact, dataset, expected_path, output_geometry, cancelled)
+        expected_path.unlink()
         if source_fingerprint(path, cancelled) != fingerprint:
             raise DomainError("Source changed during import", kind="source_changed")
         dataset["version"] = _content_hash(artifact, cancelled)

@@ -1,4 +1,4 @@
-"""Verify an actual schema-2/3/4 project on a new copy, preserving its source tree."""
+"""Verify an actual schema-2/3/4/5 project on a new copy, preserving its source tree."""
 from __future__ import annotations
 
 import argparse
@@ -43,7 +43,7 @@ def main() -> None:
     args = parser.parse_args()
     source = Path(args.source_project).resolve()
     before = records(source)
-    assert before["schema"] in {2, 3, 4} and before["datasets"], "Supply an existing schema-2/3/4 project with data."
+    assert before["schema"] in {2, 3, 4, 5} and before["datasets"], "Supply an existing schema-2/3/4/5 project with data."
     backup_pattern = f"project-v{before['schema']}-*.spa"
     datasets = [json.loads(row[0]) for row in before["datasets"]]
     originals = {str(item): sha256(item) for item in [source, *[source.parent / item["relativePath"] for item in datasets]]}
@@ -57,9 +57,9 @@ def main() -> None:
     report = {"ok": False, "sourceProject": str(source), "copiedProject": str(destination)}
     try:
         opened = rpc.call("project.open", {"path": str(destination)})
-        assert opened["schemaVersion"] == 5
+        assert opened["schemaVersion"] == 6
         after = records(destination)
-        assert after["schema"] == 5
+        assert after["schema"] == 6
         assert all(after[key] == before[key] for key in ("datasets", "layers", "metadata", "tasks", "publications", "exports"))
         with closing(sqlite3.connect(destination)) as connection:
             assert not connection.execute("PRAGMA foreign_key_check").fetchall()

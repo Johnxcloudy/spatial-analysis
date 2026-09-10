@@ -61,6 +61,8 @@ class TaskManager:
         workspace: WorkspaceStore,
         *,
         command_factory: Callable[[Path], list[str]] | None = None,
+        timeout_seconds: float = 900.0,
+        memory_bytes: int = 2 * 1024**3,
     ) -> None:
         self.projects = projects
         self.workspace = workspace
@@ -70,10 +72,38 @@ class TaskManager:
         self._work_dir: Path | None = None
         self._operation: str | None = None
         self._stderr_handle: Any = None
+        self._guard: Any = None
+        self._timeout_seconds = timeout_seconds
+        self._memory_bytes = memory_bytes
+        self._started_at = 0.0
+        self._publication: tuple[str, dict] | None = None
+        self._publication_lease: Any = None
+        self._copy_leases: dict = {}
+
+    def start_analysis(self, params: dict[str, Any]) -> dict[str, Any]:
+        from .analysis import validate_options
+        require_exact_keys(params, {"path", "operation", "name", "inputDatasetId", "overlayDatasetId",
+                                   "inputClassField", "overlayClassField", "classificationStandard", "analysisCrs", "crsReason"})
+        self.projects.active_path(params["path"])
+        self.workspace.recover()
+        self.harvest()
+        self._require_idle()
+        input_dataset = self.workspace.dataset(params["path"], params["inputDatasetId"])
+        overlay_dataset = self.workspace.dataset(params["path"], params["overlayDatasetId"])
+        options = validate_options({key: value for key, value in params.items() if key != "path"}, input_dataset, overlay_dataset)
+        input_path = self.workspace.managed_path(input_dataset)
+        overlay_path = self.workspace.managed_path(overlay_dataset)
+        task_id, dataset_id, analysis_id = (str(uuid.uuid4()) for _ in range(3))
+        task = self.workspace.create_task("analysis", task_id=task_id, dataset_id=dataset_id)
+        self._start(task_id, "analysis", {"taskId": task_id, "datasetId": dataset_id, "analysisId": analysis_id,
+                    "input": input_dataset, "overlay": overlay_dataset, "inputPath": str(input_path),
+                    "overlayPath": str(overlay_path), "options": options}, publish_path=None)
+        return task
 
     def require_mutation_allowed(self) -> None:
         self.harvest()
-        if self._operation == "save_as":
+        copying = self._task_id is not None and self.workspace.task(self._task_id)["kind"] == "save_as"
+        if copying or self.workspace.recovery_active:
             raise DomainError("Project copy is running", kind="task_busy")
 
     def start_save_as(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -130,7 +160,7 @@ class TaskManager:
         self._start(task_id, "import", payload, publish_path=None)
         return task
 
-    def start_export(self, params: dict[str, Any]) -> dict[str, Any]:
+    def start_export(self, params: dict[str, Any], *, statistics: bool = False) -> dict[str, Any]:
         require_exact_keys(params, {"path", "datasetId", "destination"})
         self.projects.active_path(params["path"])
         self.workspace.recover()
@@ -141,9 +171,11 @@ class TaskManager:
         managed_path = self.workspace.managed_path(dataset)
         destination = require_path(params["destination"], "destination")
         raster_export = dataset["kind"] == "raster"
-        allowed_extensions = {".tif", ".tiff"} if raster_export else {".gpkg"}
+        if statistics and dataset["source"]["driver"] != "SpatialAnalysis":
+            raise DomainError("Statistics export requires an analysis result", kind="invalid_dataset_kind")
+        allowed_extensions = {".csv"} if statistics else {".tif", ".tiff"} if raster_export else {".gpkg"}
         if destination.suffix.lower() not in allowed_extensions:
-            expected = ".tif or .tiff" if raster_export else ".gpkg"
+            expected = ".csv" if statistics else ".tif or .tiff" if raster_export else ".gpkg"
             raise InvalidParamsError(f"destination must use the {expected} extension")
         if destination.exists():
             raise DomainError("Export destination already exists", kind="destination_exists", detail=str(destination))
@@ -163,7 +195,7 @@ class TaskManager:
             raise DomainError("Export temporary path already exists", kind="destination_exists", detail=str(publish_path))
         self._start(
             task_id,
-            "raster_export" if raster_export else "export",
+            "analysis_csv" if statistics else "raster_export" if raster_export else "export",
             {"dataset": dataset, "managedPath": str(managed_path)},
             publish_path=publish_path,
         )
@@ -261,6 +293,9 @@ class TaskManager:
         require_exact_keys(params, {"path", "taskId"})
         self.projects.active_path(params["path"])
         task_id = require_string(params["taskId"], "taskId", maximum=64)
+        recovery = self.workspace.cancel_recovery(task_id)
+        if recovery is not None:
+            return recovery
         task = self.workspace.task(task_id)
         if task["status"] != "running":
             return task
@@ -272,7 +307,10 @@ class TaskManager:
             while self._process.poll() is None and time.monotonic() < deadline:
                 time.sleep(0.05)
             if self._process.poll() is None:
-                self._process.terminate()
+                if self._guard is not None:
+                    self._guard.terminate()
+                else:
+                    self._process.terminate()
                 try:
                     self._process.wait(timeout=1.0)
                 except subprocess.TimeoutExpired:
@@ -281,6 +319,8 @@ class TaskManager:
             else:
                 self._process.wait()
             self._clear_process()
+        self._publication = None
+        self._release_publication_lease()
         self.workspace.discard_pending(task_id)
         if task["kind"] == "save_as":
             from .portability import abandon_copy
@@ -293,6 +333,8 @@ class TaskManager:
         )
 
     def harvest(self) -> None:
+        if self.projects._session is not None and self.workspace.recovery_active:
+            self.workspace.recover()
         if self._process is None or self._task_id is None or self._work_dir is None:
             return
         self._harvest_progress()
@@ -302,8 +344,11 @@ class TaskManager:
         work_dir = self._work_dir
         operation = self._operation
         return_code = self._process.wait()
+        guard_reason = self._guard.reason if self._guard is not None else None
         self._clear_process()
         try:
+            if guard_reason is not None:
+                raise DomainError("GIS worker exceeded its resource budget", kind=guard_reason, detail=guard_reason)
             result = _bounded_json(work_dir / "result.json", MAX_RESULT_BYTES)
             if not isinstance(result, dict) or set(result) != {"ok", "result"} and set(result) != {"ok", "error"}:
                 raise DomainError("Worker result shape is invalid", kind="invalid_worker_result")
@@ -321,28 +366,66 @@ class TaskManager:
                 self.workspace.update_task(task_id, status=status, stage=status, error=error_text[:8192])
                 if self.workspace.task(task_id)["kind"] == "save_as":
                     from .portability import abandon_copy
+                    self._release_publication_lease()
                     abandon_copy(self.workspace, task_id)
+                self._cleanup_export_pending(self.workspace.task(task_id))
+                self._publication = None
                 self._cleanup_work_dir(work_dir)
                 return
             if return_code != 0:
                 raise DomainError("Worker exited unsuccessfully", kind="worker_failed", detail=str(return_code))
             payload = result["result"]
             task = self.workspace.task(task_id)
+            proof = None
+            copy_proofs = None
+            if operation == "verify_recovery":
+                from .recovery import bind_proofs
+                copy_proofs = bind_proofs(payload, self._copy_leases)
+            elif operation == "verify_publication":
+                if self._publication is None:
+                    raise DomainError("Publication verification context is missing", kind="invalid_worker_result")
+                from .publication import VerifiedArtifact
+                proof = VerifiedArtifact(payload, self._publication_lease)
+                operation, payload = self._publication
+                self._publication = None
+            elif task["kind"] not in {"save_as", "relocate"}:
+                self._begin_verification(task_id, work_dir, payload, task, operation)
+                return
             if task["kind"] == "save_as":
                 from .portability import prepare_copy_publication, complete_copy_publication
-                prepare_copy_publication(self.workspace, task_id, payload)
-                complete_copy_publication(self.workspace, task_id)
+                if copy_proofs is None:
+                    from .recovery import copy_paths
+                    from .publication import ArtifactLease
+                    prepare_copy_publication(self.workspace, task_id, payload)
+                    paths = copy_paths(self.workspace, task_id, relocate=True)
+                    for artifact in paths:
+                        self._copy_leases[str(artifact.resolve())] = ArtifactLease(artifact)
+                    self.workspace.update_task(task_id, stage="verifying_publication", completed=None, total=None)
+                    self._start(task_id, "verify_recovery", {"paths": list(self._copy_leases)}, publish_path=None, reuse=True)
+                    return
+                complete_copy_publication(self.workspace, task_id, recovering=True, proofs=copy_proofs)
             elif task["kind"] == "relocate":
                 from .portability import complete_relocation
                 complete_relocation(self.workspace, task_id, payload)
             elif task["kind"] != "export":
-                self._complete_import(task_id, work_dir, payload, operation)
+                self._complete_import(task_id, work_dir, payload, operation, proof=proof)
             else:
-                self._complete_export(task_id, work_dir, payload, task, operation)
+                self._complete_export(task_id, work_dir, payload, task, operation, proof=proof)
             self._cleanup_work_dir(work_dir)
         except Exception as exc:
+            self._publication = None
             message = self._exception_text(exc)
-            if self.workspace.has_pending(task_id):
+            if self.workspace.task(task_id)["kind"] == "save_as":
+                from .portability import abandon_copy, _journal, COPY_MARKER
+                self._release_publication_lease()
+                _, _, destination = _journal(self.workspace, task_id)
+                if destination.exists() and not (destination / COPY_MARKER).exists():
+                    self.workspace.update_task(task_id, status="interrupted", stage="publication_pending", error=message or "Project copy registration interrupted")
+                else:
+                    abandon_copy(self.workspace, task_id)
+                    self.workspace.update_task(task_id, status="failed", stage="failed", error=message or "Project copy failed")
+                    self._cleanup_work_dir(work_dir)
+            elif self.workspace.has_pending(task_id):
                 self.workspace.update_task(
                     task_id, status="interrupted", stage="publication_pending", error=message or "Publication was interrupted"
                 )
@@ -350,8 +433,12 @@ class TaskManager:
                 self.workspace.update_task(task_id, status="failed", stage="failed", error=message or "Worker failed")
                 self._cleanup_export_pending(self.workspace.task(task_id))
                 self._cleanup_work_dir(work_dir)
+        finally:
+            if self._process is None:
+                self._release_publication_lease()
 
     def close(self) -> None:
+        self.workspace.close_recovery()
         if self._task_id is not None:
             try:
                 self.cancel({
@@ -364,22 +451,33 @@ class TaskManager:
                     self._process.wait()
                 self._clear_process()
         self.workspace.interrupt_running_tasks()
+        self._release_publication_lease()
 
-    def _start(self, task_id: str, kind: str, payload: dict[str, Any], *, publish_path: Path | None) -> None:
+    def _release_publication_lease(self) -> None:
+        for lease in self._copy_leases.values():
+            lease.close()
+        self._copy_leases.clear()
+        if self._publication_lease is not None:
+            self._publication_lease.close()
+            self._publication_lease = None
+
+    def _start(self, task_id: str, kind: str, payload: dict[str, Any], *, publish_path: Path | None, reuse: bool = False) -> None:
         root = self.projects._session.path.parent
         work_dir = root / "staging" / "tasks" / task_id
         try:
-            work_dir.mkdir(parents=True, exist_ok=False)
+            work_dir.mkdir(parents=True, exist_ok=reuse)
+            if not reuse:
+                self._started_at = time.monotonic()
             request_path = work_dir / "request.json"
             _atomic_json(request_path, {
-                "protocolVersion": 4, "taskId": task_id, "kind": kind,
+                "protocolVersion": 5, "taskId": task_id, "kind": kind,
                 "payload": payload, "workDir": str(work_dir.resolve()),
                 "publishPath": str(publish_path.resolve()) if publish_path is not None else None,
             })
             stderr_handle = (work_dir / "stderr.log").open("ab")
             try:
                 process = subprocess.Popen(
-                    self._command_factory(request_path),
+                    (_default_command if reuse else self._command_factory)(request_path),
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=stderr_handle,
@@ -391,21 +489,56 @@ class TaskManager:
                 raise
         except Exception as exc:
             self.workspace.update_task(task_id, status="failed", stage="failed", error=str(exc))
+            self._cleanup_export_pending(self.workspace.task(task_id))
             if 'work_dir' in locals():
                 self._cleanup_work_dir(work_dir)
-            if publish_path is not None:
-                task = self.workspace.task(task_id)
-                self._cleanup_export_pending(task)
             raise DomainError("Could not start GIS worker", kind="worker_start_failed", detail=str(exc)) from exc
+        from .resource_guard import ResourceGuard
+        try:
+            guard = ResourceGuard(process,
+                timeout_seconds=max(0.01, self._timeout_seconds - (time.monotonic() - self._started_at)),
+                memory_bytes=self._memory_bytes)
+        except Exception as exc:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=2)
+            stderr_handle.close()
+            self.workspace.update_task(task_id, status="failed", stage="failed", error=str(exc))
+            self._cleanup_export_pending(self.workspace.task(task_id))
+            self._cleanup_work_dir(work_dir)
+            raise DomainError("Could not monitor GIS worker", kind="worker_start_failed", detail=str(exc)) from exc
         self._process = process
         self._task_id = task_id
         self._work_dir = work_dir
         self._operation = kind
         self._stderr_handle = stderr_handle
+        self._guard = guard
+
+    def _begin_verification(self, task_id: str, work_dir: Path, payload: Any, task: dict, operation: str) -> None:
+        if task["kind"] == "export":
+            if not isinstance(payload, dict) or set(payload) != {"artifactPath", "publicationPath", "artifactSize", "artifactSha256"}:
+                raise DomainError("Export result shape is invalid", kind="invalid_worker_result")
+            filename = "statistics.csv" if operation == "analysis_csv" else "export.tif" if operation == "raster_export" else "export.gpkg"
+            self._worker_artifact(work_dir, payload["artifactPath"], filename)
+            destination = Path(task["destination"]).resolve()
+            artifact = destination.with_name(f".{destination.name}.{task_id}.pending")
+            if payload["publicationPath"] != str(artifact):
+                raise DomainError("Export publication path is invalid", kind="invalid_worker_result")
+        else:
+            if not isinstance(payload, dict) or set(payload) != {"dataset", "artifactPath"}:
+                raise DomainError("Import result shape is invalid", kind="invalid_worker_result")
+            filename = "snapshot.tif" if operation == "raster_import" else "snapshot.gpkg"
+            artifact = self._worker_artifact(work_dir, payload["artifactPath"], filename)
+        self._publication = (operation, payload)
+        from .publication import ArtifactLease
+        self._publication_lease = ArtifactLease(artifact)
+        (work_dir / "result.json").unlink()
+        self.workspace.update_task(task_id, stage="verifying_publication", completed=None, total=None)
+        self._start(task_id, "verify_publication", {"path": str(artifact)}, publish_path=None, reuse=True)
 
     def _require_idle(self) -> None:
         running = self.workspace.running_task()
-        if self._process is not None or running is not None:
+        if self._process is not None or running is not None or self.workspace.recovery_active:
             raise DomainError("Another GIS task is already running", kind="task_busy")
 
     def _harvest_progress(self) -> None:
@@ -432,18 +565,18 @@ class TaskManager:
         except (DomainError, OSError, ValueError):
             return
 
-    def _complete_import(self, task_id: str, work_dir: Path, payload: Any, operation: str | None = None) -> None:
+    def _complete_import(self, task_id: str, work_dir: Path, payload: Any, operation: str | None = None, *, proof=None) -> None:
         if not isinstance(payload, dict) or set(payload) != {"dataset", "artifactPath"}:
             raise DomainError("Import result shape is invalid", kind="invalid_worker_result")
         if operation is None and isinstance(payload["dataset"], dict) and payload["dataset"].get("kind") == "raster":
             operation = "raster_import"
         filename = "snapshot.tif" if operation == "raster_import" else "snapshot.gpkg"
         artifact = self._worker_artifact(work_dir, payload["artifactPath"], filename)
-        self.workspace.prepare_import_publication(task_id, payload["dataset"], artifact)
-        self.workspace.complete_import_publication(task_id)
+        self.workspace.prepare_import_publication(task_id, payload["dataset"], artifact, proof=proof)
+        self.workspace.complete_import_publication(task_id, proof=proof)
 
     def _complete_export(
-        self, task_id: str, work_dir: Path, payload: Any, task: dict[str, Any], operation: str | None = None
+        self, task_id: str, work_dir: Path, payload: Any, task: dict[str, Any], operation: str | None = None, *, proof=None
     ) -> None:
         if not isinstance(payload, dict) or set(payload) != {
             "artifactPath", "publicationPath", "artifactSize", "artifactSha256"
@@ -452,7 +585,7 @@ class TaskManager:
         if operation is None and task["datasetId"] is not None:
             dataset = self.workspace.dataset(str(self.projects._session.path), task["datasetId"])
             operation = "raster_export" if dataset["kind"] == "raster" else "export"
-        filename = "export.tif" if operation == "raster_export" else "export.gpkg"
+        filename = "statistics.csv" if operation == "analysis_csv" else "export.tif" if operation == "raster_export" else "export.gpkg"
         self._worker_artifact(work_dir, payload["artifactPath"], filename)
         publication = Path(payload["publicationPath"]).resolve(strict=False) if isinstance(payload["publicationPath"], str) else None
         destination = Path(task["destination"]).resolve(strict=False)
@@ -462,7 +595,7 @@ class TaskManager:
         self.workspace.prepare_export_publication(
             task_id, publication, payload["artifactSize"], payload["artifactSha256"]
         )
-        self.workspace.complete_export_publication(task_id)
+        self.workspace.complete_export_publication(task_id, proof=proof)
 
     @staticmethod
     def _worker_artifact(work_dir: Path, value: Any, filename: str) -> Path:
@@ -489,6 +622,9 @@ class TaskManager:
             pass
 
     def _clear_process(self) -> None:
+        if self._guard is not None:
+            self._guard.stop()
+            self._guard = None
         if self._stderr_handle is not None:
             self._stderr_handle.close()
         self._process = None
@@ -509,6 +645,15 @@ class TaskManager:
             uuid.UUID(candidate.name)
         except ValueError:
             return
+        # Retain ownership evidence if an external reader prevents pending-file
+        # removal. Reopen recovery can retry without deleting an unowned file.
+        if (candidate / "publication-owned.json").is_file():
+            task = self.workspace.task(candidate.name)
+            if task["kind"] == "export" and task["destination"]:
+                destination = Path(task["destination"]).resolve(strict=False)
+                pending = destination.with_name(f".{destination.name}.{task['id']}.pending")
+                if pending.exists():
+                    return
         shutil.rmtree(candidate, ignore_errors=True)
 
     def _cleanup_export_pending(self, task: dict[str, Any]) -> None:

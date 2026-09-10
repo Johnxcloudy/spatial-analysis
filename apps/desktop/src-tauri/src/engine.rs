@@ -16,7 +16,8 @@ use tauri::{AppHandle, Manager};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, ChildStdin, ChildStdout, Command},
-    sync::Mutex,
+    sync::{Mutex, MutexGuard},
+    time::Instant,
 };
 
 struct Session {
@@ -189,12 +190,27 @@ async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>(
 }
 
 impl EngineManager {
+    async fn lock_before(
+        &self,
+        deadline: Instant,
+    ) -> Result<MutexGuard<'_, Option<Session>>, EngineError> {
+        tokio::time::timeout_at(deadline, self.session.lock())
+            .await
+            .map_err(|_| {
+                EngineError::local(
+                    "REQUEST_QUEUE_TIMEOUT",
+                    "请求排队超时；引擎和当前计算任务仍在运行，请重试。",
+                )
+            })
+    }
+
     pub async fn request(
         &self,
         app: &AppHandle,
         method: &str,
         params: Value,
     ) -> Result<Value, EngineError> {
+        let deadline = Instant::now() + Duration::from_secs(90);
         validate_request(method, &params)?;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         let mut message =
@@ -207,12 +223,12 @@ impl EngineManager {
             ));
         }
         message.push(b'\n');
-        let mut slot = self.session.lock().await;
+        let mut slot = self.lock_before(deadline).await?;
         if slot.is_none() {
             *slot = Some(Session::start(app)?);
         }
         let session = slot.as_mut().expect("session initialized");
-        let response = tokio::time::timeout(Duration::from_secs(90), async {
+        let response = tokio::time::timeout_at(deadline, async {
             session.stdin.write_all(&message).await?;
             session.stdin.flush().await?;
             read_frame(&mut session.stdout, MAX_RESPONSE_BYTES).await
@@ -260,5 +276,30 @@ impl EngineManager {
                 let _ = session.child.start_kill();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod queue_tests {
+    use super::*;
+
+    #[test]
+    fn expired_queue_wait_preserves_session_owner() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let manager = EngineManager::default();
+            let owner = manager.session.lock().await;
+            let error = manager
+                .lock_before(Instant::now() + Duration::from_millis(10))
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(error.data["kind"], "REQUEST_QUEUE_TIMEOUT");
+            assert!(manager.session.try_lock().is_err());
+            drop(owner);
+            assert!(manager
+                .lock_before(Instant::now() + Duration::from_secs(1))
+                .await
+                .is_ok());
+        });
     }
 }

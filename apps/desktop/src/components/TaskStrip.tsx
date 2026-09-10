@@ -2,7 +2,8 @@ import { AlertCircle, CheckCircle2, LoaderCircle, Square, XCircle } from 'lucide
 import type { Task } from '../../../../shared/contracts';
 
 const stages: Record<string, string> = { starting: '正在启动', queued: '等待执行', inspecting: '检查来源', fingerprinting: '核对来源文件', reading: '读取数据', copying: '复制数据', backing_up: '备份项目数据库', relocating: '登记来源位置', converting: '转换坐标', validating: '校验数据', writing: '写入快照', exporting: '导出数据', verifying: '验证成果', verifying_copy: '校验项目副本', publishing: '登记成果', completed: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断' };
-const kinds: Record<Task['kind'], string> = { import: '数据导入', export: '数据导出', points: '生成点数据', save_as: '项目另存为', relocate: '来源定位' };
+const kinds: Record<Task['kind'], string> = { analysis: '用地分析', import: '数据导入', export: '数据导出', points: '生成点数据', save_as: '项目另存为', relocate: '来源定位' };
+Object.assign(stages, { reading_analysis_inputs: '读取分析输入', checking_overlaps: '检查同层重叠', intersecting: '计算面相交', validating_analysis: '校验分析成果', exporting_statistics: '导出分类统计' });
 
 export function TaskStrip({ tasks, disabled, onCancel }: { tasks: Task[]; disabled: boolean; onCancel: (id: string) => void }) {
   if (!tasks.length) return null;

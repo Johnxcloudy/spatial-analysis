@@ -14,7 +14,7 @@ const descriptors = dialogMethods.map((method) => Object.getOwnPropertyDescripto
 beforeAll(() => Object.defineProperties(HTMLDialogElement.prototype, { showModal: { configurable: true, value() { this.setAttribute('open', ''); } }, close: { configurable: true, value() { this.removeAttribute('open'); } } }));
 afterAll(() => dialogMethods.forEach((method, index) => { const descriptor = descriptors[index]; if (descriptor) Object.defineProperty(HTMLDialogElement.prototype, method, descriptor); else Reflect.deleteProperty(HTMLDialogElement.prototype, method); }));
 
-const project: Project = { id: 'original', name: '规划', description: '', schemaVersion: 5, createdAt: '2026-09-10T00:00:00Z', updatedAt: '2026-09-10T00:00:00Z', projectPath: 'C:/projects/original/project.spa', analysisCrs: null, displayCrs: 'EPSG:3857', viewState: { center: [114, 27], zoom: 5 } };
+const project: Project = { id: 'original', name: '规划', description: '', schemaVersion: 6, createdAt: '2026-09-10T00:00:00Z', updatedAt: '2026-09-10T00:00:00Z', projectPath: 'C:/projects/original/project.spa', analysisCrs: null, displayCrs: 'EPSG:3857', viewState: { center: [114, 27], zoom: 5 } };
 const copy: Project = { ...project, id: 'copy', name: '草稿名称', description: '未保存说明', analysisCrs: 'EPSG:4547', projectPath: 'C:/copies/new-copy/project.spa', viewState: { center: [113, 28], zoom: 9 } };
 const baseTask: Task = { id: 'copy-task', kind: 'save_as', status: 'running', stage: 'copying', completed: 0, total: 10, createdAt: project.createdAt, updatedAt: project.updatedAt, datasetId: null, destination: copy.projectPath, error: null };
 const dataset: Dataset = { kind: 'table', id: 'table', name: '坐标表', version: 'v1', source: { path: 'C:/old/points.csv', layer: 'records', driver: 'CSV', fingerprint: 'fingerprint', encoding: 'utf-8', assignedCrs: null, crsWkt: null, metadata: {} }, relativePath: 'tables/table.gpkg', storageLayer: 'records', cellMetadataLayer: null, featureCount: 1, geometryType: null, crsWkt: null, crsAuthority: null, bounds: null, boundsWgs84: null, fields: [], internalIdField: '_id', sourceFidField: '_source', report: { status: 'warning', checks: [], warnings: [], notChecked: [], counts: {}, validatorVersion: 'test' }, createdAt: project.createdAt };
@@ -27,7 +27,7 @@ function fixture(initialTasks: Task[] = []) {
   let preventClose: ((prevent: () => void) => void) | undefined;
   const request = vi.fn(async (method: EngineMethod, params: Record<string, unknown> = {}) => {
     switch (method) {
-      case 'runtime.info': return { protocolVersion: 5, engineVersion: '0.5.0', versions: {}, drivers: {} };
+      case 'runtime.info': return { protocolVersion: 6, engineVersion: '0.5.0', versions: {}, drivers: {} };
       case 'project.open': current = params.path === copy.projectPath ? copy : project; return current;
       case 'workspace.get': return { projectId: current.id, datasets: [dataset], layers: [], tasks } satisfies Workspace;
       case 'project.saveAs': tasks = [baseTask, ...tasks]; return baseTask;

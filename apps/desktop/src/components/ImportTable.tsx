@@ -30,9 +30,10 @@ export function ImportTable({ bridge, state, onClose }: { bridge: DesktopBridge;
     setError('');
     setLoading(false);
     if (!sourcePath || !headerValid || state.needsReopen) return;
+    const controller = new AbortController();
     setLoading(true);
     const timer = setTimeout(() => {
-      void Promise.resolve().then(() => state.inspectTable(options)).then((result) => {
+      void Promise.resolve().then(() => state.inspectTable(options, controller.signal)).then((result) => {
         if (sequence.current !== token) return;
         if (options.sheet && result.sheet !== options.sheet) throw new Error('预览工作表与当前选择不一致。');
         setSheets(result.sheets);
@@ -44,7 +45,7 @@ export function ImportTable({ bridge, state, onClose }: { bridge: DesktopBridge;
         if (failure.data?.kind?.startsWith('ENGINE_')) state.handleFailure(cause);
       }).finally(() => { if (sequence.current === token) setLoading(false); });
     }, 180);
-    return () => { sequence.current += 1; clearTimeout(timer); };
+    return () => { sequence.current += 1; controller.abort(); clearTimeout(timer); };
   }, [options, sourcePath, headerValid, state.inspectTable, state.needsReopen, state.handleFailure]);
 
   const choose = async () => {

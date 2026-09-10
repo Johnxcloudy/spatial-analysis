@@ -1,9 +1,7 @@
 use serde::Serialize;
 use serde_json::{json, Value};
 
-#[cfg(not(test))]
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
-#[cfg(not(test))]
 pub const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Serialize)]
@@ -33,6 +31,9 @@ pub fn validate_request(method: &str, params: &Value) -> Result<(), EngineError>
             | "project.saveAs"
             | "project.close"
             | "diagnostics.run"
+            | "analysis.run"
+            | "analysis.result"
+            | "analysis.exportCsv"
             | "source.inspect"
             | "source.status"
             | "source.relocate"
@@ -143,6 +144,13 @@ mod tests {
     #[test]
     fn accepts_portability_workflow_methods() {
         for method in ["project.saveAs", "source.status", "source.relocate"] {
+            assert!(validate_request(method, &json!({})).is_ok(), "{method}");
+        }
+    }
+
+    #[test]
+    fn accepts_analysis_workflow_methods() {
+        for method in ["analysis.run", "analysis.result", "analysis.exportCsv"] {
             assert!(validate_request(method, &json!({})).is_ok(), "{method}");
         }
     }

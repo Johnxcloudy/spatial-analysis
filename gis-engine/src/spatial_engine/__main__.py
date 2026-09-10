@@ -107,7 +107,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="spatial-engine")
     parser.add_argument("--request", help="process one JSON-RPC request and exit")
     parser.add_argument("--worker", help="execute a managed GIS job request file")
+    parser.add_argument("--query-worker", action="store_true", help=argparse.SUPPRESS)
     arguments = parser.parse_args(argv)
+    if arguments.query_worker:
+        if arguments.worker is not None or arguments.request is not None:
+            parser.error("query mode cannot be combined with other modes")
+        from .query_worker import run
+        return run()
     if arguments.worker is not None:
         from .resources import configure_native_data_paths
         from .worker import run_worker

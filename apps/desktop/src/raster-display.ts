@@ -3,7 +3,7 @@ import type { DesktopBridge } from './bridge';
 import { latestRequest } from './latest-request';
 
 export interface RasterFrame { bbox: Bounds; width: number; height: number }
-export interface RasterImageRequest extends RasterFrame { path: string; datasetId: string; version: string; style: RasterStyle }
+export interface RasterImageRequest extends RasterFrame { path: string; datasetId: string; version: string; style: RasterStyle; signal?: AbortSignal }
 
 export function rasterFrame(extent: number[], size: number[]): RasterFrame | null {
   if (extent.length !== 4 || size.length !== 2 || ![...extent, ...size].every(Number.isFinite) || size.some((value) => value <= 0) || extent[2] <= extent[0] || extent[3] <= extent[1]) return null;
@@ -18,8 +18,8 @@ export function rasterFrame(extent: number[], size: number[]): RasterFrame | nul
 
 export function createRasterRenderer(bridge: DesktopBridge, callbacks: { result: (result: RasterRenderResult) => void; error: (cause: unknown) => void; busy: (value: boolean) => void }) {
   return latestRequest(async (input: RasterImageRequest) => {
-    const { version, ...params } = input;
-    const result = await bridge.request('raster.render', params);
+    const { version, signal, ...params } = input;
+    const result = signal ? await bridge.request('raster.render', params, signal) : await bridge.request('raster.render', params);
     if (result.datasetId !== input.datasetId || result.version !== version || result.dataCrs !== 'EPSG:3857' || result.mimeType !== 'image/png' || result.resampling !== 'nearest' || result.width !== input.width || result.height !== input.height || result.bbox.length !== 4 || result.bbox.some((value, index) => value !== input.bbox[index])) throw new Error('栅格显示响应与当前视窗不匹配，请刷新工作区。');
     return result;
   }, callbacks);

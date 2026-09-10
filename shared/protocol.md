@@ -1,12 +1,12 @@
-# Desktop engine protocol v5
+# Desktop engine protocol v6
 
-Transport: persistent console sidecar, UTF-8 newline-delimited JSON-RPC 2.0. The host assigns request IDs and serializes calls. One response line per request. No protocol chatter or logs on stdout. A 90-second host deadline terminates an unresponsive process tree. Import/export/point/copy/relocation jobs execute in a child worker, while short task polling remains responsive. Methods not listed here are rejected. Responses use camelCase matching shared/contracts.ts. Protocol version is 5. Requests are limited to 1 MiB; responses to 8 MiB including the newline. Oversize responses return a domain error without losing the active project.
+Transport: persistent console sidecar, UTF-8 newline-delimited JSON-RPC 2.0. The host assigns request IDs and serializes calls. One response line per request. No protocol chatter or logs on stdout. A 90-second host deadline terminates an unresponsive process tree. Import/export/point/copy/relocation jobs execute in a child worker, while short task polling remains responsive. Methods not listed here are rejected. Responses use camelCase matching shared/contracts.ts. Protocol version is 6. Requests are limited to 1 MiB; responses to 8 MiB including the newline. Oversize responses return a domain error without losing the active project.
 
 ## Methods
 
 - runtime.info, params {} -> RuntimeInfo. Load actual GIS libraries and report actual GDAL driver capabilities, not assumed availability.
 - project.create, params {directory: string, name: string} -> Project. directory is the intended NEW project directory (may exist if project.spa does not). name is a nonempty display name. Create project.spa and owned subdirectories; never overwrite a project. Default description empty, analysisCrs null, displayCrs EPSG:3857, viewState {center:[114,27.1],zoom:5}. Engine holds a lock for the active project. Creation/open closes the previously active project only after the new operation succeeds.
-- project.open, params {path: string} -> Project. path is an existing project.spa. Validate identity and schema before any writes; acquire an exclusive OS-backed lock, fail clearly if held by another engine. Back up schema v1/v2/v3/v4 via SQLite backup, validate that backup, then migrate transactionally to v5. Reject future schema versions, corrupt files and incomplete project copies.
+- project.open, params {path: string} -> Project. path is an existing project.spa. Validate identity and schema before any writes; acquire an exclusive OS-backed lock, fail clearly if held by another engine. Back up schema v1/v2/v3/v4/v5 via SQLite backup, validate that backup, then migrate transactionally to v6. Reject future schema versions, corrupt files and incomplete project copies.
 - project.save, params {path:string, name:string, description:string, analysisCrs:string|null, displayCrs:string, viewState:{center:[number,number],zoom:number}} -> Project. Must refer to the active project. Validate finite coordinates, zoom and CRS. Use an atomic SQLite transaction; preserve id/createdAt and update updatedAt. Invalid inputs must not change the project.
 - project.close, params {} -> {closed:true}. Release active project lock.
 - diagnostics.run, params {directory:string} -> ProbeReport. directory is for generated diagnostic artifacts (a cache folder, not original inputs). Create a unique subdirectory per run. Test a 100m x 100m rectangle at x=500000, y=3000000 in EPSG:4547; overlay with a 50m-shifted rectangle produces 5000m2 intersection. Measure the full rectangle as 10000m2. Use GeoPandas/Shapely, real GeoPackage IO, and PROJ forward/inverse transformation; report pass/fail checks and generate WGS84 GeoJSON preview of source/intersection. Save a JSON report. Check actual OpenFileGDB and GeoTIFF driver availability and tiny raster IO if installed. Preserve original data. Probe is synthetic and is not real-world survey accuracy validation.
@@ -15,7 +15,7 @@ Phase 1A methods are `source.inspect`, `workspace.get`, `vector.import`, `vector
 
 The Python entry point is `python -m spatial_engine` (stdio). `--request '<JSON request>'` runs one request and exits for CI/package smoke tests. The frozen console executable is named spatial-engine.exe and accepts the same switch. The private `--worker <request-file>` mode executes one GIS job in its staging directory, using atomic progress/result files; stdout remains unused by the worker. Project metadata is modified only by the parent service.
 
-Application version 0.5.0. Project schema version 5. The engine stores its rotating log under LOCALAPPDATA/SpatialAnalysis/logs/engine.log (with an appropriate non-Windows development fallback). No log tokens or secrets. Error response: {jsonrpc:"2.0",id,error:{code,message,data?:{kind,detail?}}}. Standard parse/invalid-request/method/params errors use -32700/-32600/-32601/-32602. Domain failures use -32000 with stable data.kind. A syntactically valid JSON value that is not an RPC object is an invalid request; a parser recursion failure is a parse error.
+Application version 0.6.0. Project schema version 6. The engine stores its rotating log under LOCALAPPDATA/SpatialAnalysis/logs/engine.log (with an appropriate non-Windows development fallback). No log tokens or secrets. Error response: {jsonrpc:"2.0",id,error:{code,message,data?:{kind,detail?}}}. Standard parse/invalid-request/method/params errors use -32700/-32600/-32601/-32602. Domain failures use -32000 with stable data.kind. A syntactically valid JSON value that is not an RPC object is an invalid request; a parser recursion failure is a parse error.
 
 ## Phase 1B Methods
 
@@ -54,7 +54,7 @@ union; tables have no MapLayer. Detailed preservation and limits: [Phase 1B](../
 
 All data queries reject the wrong dataset kind. Unknown CRS prevents raster map
 display and geographic pixel queries. Limits and retained metadata are in
-[Phase 1C](../docs/phase-1c.md). Private worker protocol is version 4; raster
+[Phase 1C](../docs/phase-1c.md). Private worker protocol is version 5; raster
 operations use snapshot.tif/export.tif and reuse the existing publication journals.
 
 ## Phase 1D Methods
@@ -80,11 +80,52 @@ operations use snapshot.tif/export.tif and reuse the existing publication journa
   Content mismatch requires a new import. This operation never rewrites
   Dataset.source or snapshot bytes.
 
-Save As blocks project/layer mutations until the worker finishes or is cancelled.
+Save As blocks project/layer mutations for the entire task, including verification
+and publication, until it completes or is cancelled.
 Task cancellation, publication journals and no-overwrite behavior apply to copies.
 Copy budget is 32 GiB; links/escaped paths, missing/changed snapshots and unresolved
 publication journals are rejected. Recovery hashes retained artifacts before
 publication; conflicts preserve the journal and pending directory for inspection.
+Copies keep an ownership marker while the directory is moved to its final name;
+the marker prevents opening it until all files pass leased hash verification.
+Large recovery uses a cancellable, bounded child. Recovery with at most 1 MiB
+of artifacts may run inline with a shared actual 1-MiB hash-read budget.
 CART-00 is an isolated development probe with no public renderer method.
+
+## Phase 2 Methods
+
+- analysis.run, params `{path,...AnalysisOptions}` -> Task(kind analysis).
+  Exact required fields: operation (clip/intersect), name, inputDatasetId,
+  overlayDatasetId, inputClassField, overlayClassField (null for clip),
+  classificationStandard, analysisCrs, crsReason. Text fields name/standard/reason
+  are bounded to 200 characters; analysisCrs to 8192. Full immutable snapshots
+  are used. Positive-area same-layer overlap rejects statistics, except clip
+  boundaries which are unioned under a separate boundary budget. No repair.
+- analysis.result, params `{path,datasetId,offset,limit}` -> AnalysisResultPage.
+  Result must have SpatialAnalysis lineage resolving to the active project's
+  input IDs/versions. Statistics are paged, at most 500 rows; record schema 1
+  includes CRS/operation/units/versions and both study and coverage denominators.
+- analysis.exportCsv, params `{path,datasetId,destination}` -> Task(kind export).
+  Destination must be a new .csv. UTF-8 BOM text includes explicit NULL flags
+  and unrounded geometric areas. Values remain text, including leading zeros;
+  spreadsheet software's automatic type conversion is outside CSV semantics.
+  vector.export for the result copies the complete GPKG, including registered
+  analysis_record and analysis_statistics attribute tables.
+
+Import/export/analysis/Save As publication verification runs in a second killable
+child within the same task deadline. Parent-held Windows read leases deny writes
+through verification and publication; proof messages are private and cannot be
+provided by public RPC. Journals retain recovery integrity/no-overwrite checks.
+Schema 1–5 migrates transactionally to 6 with a verified backup first.
+
+Private --query-worker mode allows only read inspection/display/page/result
+operations, with bounded frames, a 2-second operation deadline and 1-GiB budget.
+query_unready means asynchronous warmup is incomplete and may be retried;
+query_timeout/query_memory_limit recycle that process without closing the project.
+Task workers have autonomous 900-second/2-GiB process-tree limits, independent of
+task polling. Cancellation allows 2 seconds cooperatively, then terminates the
+worker tree. Rust's 90-second deadline includes mutex queue time; queue expiry
+alone does not terminate the healthy engine. All limits and formal area policy
+are specified in [Phase 2](../docs/phase-2.md).
 
 The Tauri command is engine_request(method: EngineMethod, params: object), returning the result value or a serialized EngineError. The frontend receives only results, not JSON-RPC envelopes. In a standalone browser the native bridge is unavailable and project/engine actions must show this honestly; no fake success or mock persistent projects.

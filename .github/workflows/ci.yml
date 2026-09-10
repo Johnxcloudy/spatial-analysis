@@ -69,6 +69,9 @@ jobs:
       - name: Verify mixed project portability through persistent RPC
         run: uv run --project gis-engine --frozen python scripts/verify-portability.py --output .artifacts/portability-source-ci
 
+      - name: Verify land analysis and bounded pressure cases
+        run: uv run --project gis-engine --frozen python scripts/verify-analysis.py --output .artifacts/analysis-source-ci --counts 1000 10000
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all -- --check
 
@@ -86,6 +89,7 @@ jobs:
           uv run --project gis-engine --frozen python scripts/verify-tables.py --executable $engine --output .artifacts/tables-frozen-ci
           uv run --project gis-engine --frozen python scripts/verify-rasters.py --executable $engine --output .artifacts/rasters-frozen-ci
           uv run --project gis-engine --frozen python scripts/verify-portability.py --executable $engine --output .artifacts/portability-frozen-ci
+          uv run --project gis-engine --frozen python scripts/verify-analysis.py --executable $engine --output .artifacts/analysis-frozen-ci --counts 1000
 
       - name: Build Windows installer
         run: npm run tauri -- build
@@ -129,4 +133,6 @@ jobs:
             .artifacts/rasters-*/**/*.log
             .artifacts/portability-*/**/*.json
             .artifacts/portability-*/**/*.log
+            .artifacts/analysis-*/report.json
+            .artifacts/analysis-*/rpc-timings.jsonl
             ${{ runner.temp }}/spatial-analysis-native-*/**/*.json

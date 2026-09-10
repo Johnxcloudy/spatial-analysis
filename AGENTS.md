@@ -4,7 +4,7 @@ Windows-first personal GIS workstation for land-use overlay and area statistics.
 
 ## Current Scope
 
-Phase 1D (0.5.0) is delivered as of 2026-09-10: project Save As, source relocation, mixed-format regression and CART-00 probes. Public protocol/schema 5, worker protocol 4. Local distribution acceptance and Windows CI run 34426091682 for pushed feature commit 41fe4b5 passed. Read docs/phase-1d.md, docs/verification-phase-1d.md and docs/superpowers/plans/2026-09-10-phase-1d.md. Acceptance uses synthetic data. Phase 2 land overlay/area statistics is next; formal cartography and Agent assistance remain future work. Select the authorized next milestone before application changes. Read the latest user instruction and 执行说明.md before selecting work; shared/contracts.ts owns public contracts.
+Phase 2 is authorized and in development: land overlay/area statistics and pressure acceptance for the user's typical 100000–500000 parcels. Target application 0.6.0, public protocol/schema 6, worker 5. Read docs/phase-2.md and docs/superpowers/plans/2026-09-10-phase-2.md. Phase 1D (0.5.0) was delivered with local acceptance and Windows CI 34426091682 for 41fe4b5; that historical evidence does not verify Phase 2. Synthetic acceptance continues. Formal cartography and Agent assistance remain future work. Read the latest user instruction and 执行说明.md before selecting work; shared/contracts.ts owns public contracts.
 
 ## Required Stage Closeout
 

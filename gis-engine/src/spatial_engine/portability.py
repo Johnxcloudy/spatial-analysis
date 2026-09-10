@@ -91,7 +91,34 @@ def _registry(connection: sqlite3.Connection) -> list[dict]:
             parent = by_id.get(metadata.get("parentDatasetId"))
             if parent is None or parent["kind"] != "table" or parent["version"] != metadata.get("parentVersion"):
                 raise DomainError("Derived dataset parent is missing or changed", kind="invalid_project")
+        if dataset["source"]["driver"] == "SpatialAnalysis":
+            _analysis_inputs(dataset, by_id)
     return datasets
+
+
+def _analysis_inputs(dataset: dict, by_id: dict) -> list[dict]:
+    if dataset["source"]["driver"] != "SpatialAnalysis" or dataset["kind"] != "vector":
+        raise DomainError("Dataset is not an analysis result", kind="invalid_dataset_kind")
+    metadata = dataset["source"]["metadata"]
+    parents = []
+    for role in ("input", "overlay"):
+        parent = by_id.get(metadata.get(role + "DatasetId"))
+        if (parent is None or parent["kind"] != "vector" or parent["id"] == dataset["id"]
+                or parent["version"] != metadata.get(role + "Version")):
+            raise DomainError("Analysis input is missing or changed", kind="invalid_project")
+        parents.append(parent)
+    return parents
+
+
+def analysis_parents(workspace, path: str, dataset: dict) -> list[dict]:
+    metadata = dataset["source"]["metadata"]
+    by_id = {}
+    for role in ("input", "overlay"):
+        parent_id = metadata.get(role + "DatasetId")
+        parent = workspace.dataset(path, parent_id)
+        workspace.managed_path(parent)
+        by_id[parent_id] = parent
+    return _analysis_inputs(dataset, by_id)
 
 
 def prepare_copy(workspace, task_id: str, project_id: str, options: dict) -> dict:
@@ -129,11 +156,12 @@ def prepare_copy(workspace, task_id: str, project_id: str, options: dict) -> dic
 
 
 def _hash(path: Path, *, cancelled=lambda: False) -> tuple[int, str]:
+    from .recovery import recovery_hash_read
     digest = hashlib.sha256()
     size = 0
     _no_links(path)
     with path.open("rb") as stream:
-        while chunk := stream.read(1024 * 1024):
+        while chunk := recovery_hash_read(stream):
             _cancel(cancelled)
             size += len(chunk)
             if size > MAX_COPY_BYTES:
@@ -270,7 +298,7 @@ def _validate_manifest(manifest, plan):
         raise DomainError("Copy exceeds the 32 GiB budget", kind="copy_limit")
 
 
-def _validate_copy(root: Path, row, manifest: dict, *, recovering: bool):
+def _validate_copy(root: Path, row, manifest: dict, *, recovering: bool, proofs=None):
     _no_links(root)
     if not root.is_dir():
         raise DomainError("Pending project copy is missing", kind="copy_failed")
@@ -297,7 +325,9 @@ def _validate_copy(root: Path, row, manifest: dict, *, recovering: bool):
         raise DomainError("Unexpected files in pending copy", kind="publication_conflict")
     for relative, entry in manifest.items():
         path = root / relative
-        if path.stat().st_size != entry[0] or (recovering and _hash(path) != tuple(entry)):
+        from .publication import check_proof
+        verified = None if proofs is None else check_proof(path, proofs[str(path.resolve())])
+        if path.stat().st_size != entry[0] or (verified is not None and verified != tuple(entry)) or (recovering and proofs is None and _hash(path) != tuple(entry)):
             raise DomainError("Pending project copy changed", kind="publication_conflict", detail=relative)
     project = _read_project(root / PROJECT_FILENAME, allow_copy_pending=True)
     if project["id"] != row["project_id"]:
@@ -333,7 +363,7 @@ def prepare_copy_publication(workspace, task_id: str, result: dict) -> None:
                            (json.dumps(result["manifest"]), task_id))
 
 
-def complete_copy_publication(workspace, task_id: str, *, recovering=False) -> dict:
+def complete_copy_publication(workspace, task_id: str, *, recovering=False, proofs=None) -> dict:
     row, temporary, destination = _journal(workspace, task_id)
     if row["manifest_json"] is None:
         raise DomainError("Project copy was interrupted before validation", kind="copy_incomplete")
@@ -342,13 +372,16 @@ def complete_copy_publication(workspace, task_id: str, *, recovering=False) -> d
     if destination.exists():
         if not recovering or temporary.exists():
             raise DomainError("Save As destination already exists", kind="destination_exists")
-        _validate_copy(destination, row, manifest, recovering=True)
+        _validate_copy(destination, row, manifest, recovering=True, proofs=proofs)
     else:
-        _validate_copy(temporary, row, manifest, recovering=recovering)
+        _validate_copy(temporary, row, manifest, recovering=True, proofs=proofs)
         try:
             _rename_directory_no_replace(temporary, destination)
         except OSError as exc:
             raise DomainError("Could not publish project copy", kind="publication_failed", detail=str(exc)) from exc
+        if proofs is not None:
+            for relative in manifest:
+                proofs[str((temporary / relative).resolve())].lease.require_identity(destination / relative)
     marker = destination / COPY_MARKER
     if marker.exists():
         marker.unlink()
@@ -366,7 +399,9 @@ def abandon_copy(workspace, task_id: str) -> bool:
     except (DomainError, OSError, ValueError):
         return False
     if destination.exists():
-        return False
+        if temporary.exists():
+            return False
+        temporary = destination
     if temporary.exists():
         marker = temporary / COPY_MARKER
         try:
@@ -432,6 +467,14 @@ def source_status(workspace, params: dict) -> dict:
     original = dataset["source"]["path"]
     result = {"datasetId": dataset["id"], "originalPath": original, "resolvedPath": original,
               "availability": "unavailable", "relocated": False, "verifiedAt": None}
+    if dataset["source"]["driver"] == "SpatialAnalysis":
+        try:
+            analysis_parents(workspace, params["path"], dataset)
+            result["resolvedPath"] = str(workspace.managed_path(dataset))
+            result["availability"] = "internal"
+        except (DomainError, InvalidParamsError, ValueError, TypeError):
+            pass
+        return result
     if dataset["source"]["driver"] == "TablePoints":
         metadata = dataset["source"]["metadata"]
         try:
@@ -465,8 +508,8 @@ def source_status(workspace, params: dict) -> dict:
 
 
 def relocation_candidate(dataset: dict, value: Any) -> Path:
-    if dataset["source"]["driver"] == "TablePoints":
-        raise DomainError("Derived point sources are internal project datasets", kind="internal_source")
+    if dataset["source"]["driver"] in {"TablePoints", "SpatialAnalysis"}:
+        raise DomainError("Derived sources are internal project datasets", kind="internal_source")
     path = _path(value, "sourcePath")
     driver = dataset["source"]["driver"]
     suffixes = {"CSV": {".csv"}, "XLSX": {".xlsx"}, "GTiff": {".tif", ".tiff"},
@@ -561,7 +604,7 @@ def complete_relocation(workspace, task_id: str, result: dict) -> dict:
     _parse_project_timestamp(result["verifiedAt"], "verifiedAt")
     if (task["kind"] != "relocate" or task["status"] != "running" or result["datasetId"] != dataset["id"]
             or result["sourcePath"] != task["destination"] or result["fingerprint"] != dataset["source"]["fingerprint"]
-            or dataset["source"]["driver"] == "TablePoints"):
+            or dataset["source"]["driver"] in {"TablePoints", "SpatialAnalysis"}):
         raise DomainError("Source relocation result is invalid", kind="invalid_worker_result")
     with workspace._connect(workspace.projects._session.path) as connection:
         connection.execute("BEGIN IMMEDIATE")

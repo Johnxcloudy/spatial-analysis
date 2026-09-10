@@ -78,7 +78,7 @@ def inspect_workspace(rpc: Rpc, project: dict, expected: dict) -> dict:
 
 def verify(rpc: Rpc, output: Path, checks: list[str]) -> dict:
     runtime = rpc.call("runtime.info")
-    assert runtime["protocolVersion"] == 5 and runtime["engineVersion"] == "0.5.0"
+    assert runtime["protocolVersion"] == 6 and runtime["engineVersion"] == "0.6.0"
     project = rpc.call("project.create", {"directory": str(output / "original"), "name": "Mixed original"})
     path = project["projectPath"]
     sources = output / "sources"
@@ -152,7 +152,7 @@ def verify(rpc: Rpc, output: Path, checks: list[str]) -> dict:
     workspace = rpc.call("workspace.get", {"path": path})
     copy_task = rpc.wait_task(path, rpc.call("project.saveAs", copy_params))
     copied = rpc.call("project.open", {"path": copy_task["destination"]})
-    assert copied["id"] != project["id"] and copied["schemaVersion"] == 5
+    assert copied["id"] != project["id"] and copied["schemaVersion"] == 6
     for key in ["name", "description", "analysisCrs", "displayCrs", "viewState"]:
         assert copied[key] == copy_params[key]
     inspect_workspace(rpc, copied, workspace)

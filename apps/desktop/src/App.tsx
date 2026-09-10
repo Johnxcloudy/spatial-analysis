@@ -12,6 +12,7 @@ import { ImportRaster } from './components/ImportRaster';
 import { LayerPanel } from './components/LayerPanel';
 import { TaskStrip } from './components/TaskStrip';
 import { VectorWorkspace } from './components/VectorWorkspace';
+import { AnalysisWorkspace } from './components/AnalysisWorkspace';
 import type { FitRequest } from './components/VectorMap';
 
 const ProjectionPreview = lazy(() => import('./components/ProjectionPreview').then((module) => ({ default: module.ProjectionPreview })));
@@ -56,7 +57,7 @@ function DiagnosticReport({ report }: { report: ProbeReport | null }) {
 
 export default function App({ bridge = desktop }: { bridge?: DesktopBridge }) {
   const state = useWorkspace(bridge);
-  const [tab, setTab] = useState<'map' | 'diagnostics' | 'projection'>('map');
+  const [tab, setTab] = useState<'map' | 'analysis' | 'diagnostics' | 'projection'>('map');
   const [sideTab, setSideTab] = useState<'layers' | 'project'>('layers');
   const [importing, setImporting] = useState(false);
   const [importingTable, setImportingTable] = useState(false);
@@ -107,10 +108,11 @@ export default function App({ bridge = desktop }: { bridge?: DesktopBridge }) {
       </aside>
 
       <main className="workspace-main">
-        <div className="workspace-tabs" role="tablist" aria-label="工作区视图"><button role="tab" id="map-tab" aria-controls="map-panel" aria-selected={tab === 'map'} onClick={() => setTab('map')}><MapIcon size={16} />地图工作区</button><button role="tab" id="diagnostics-tab" aria-controls="diagnostics-panel" aria-selected={tab === 'diagnostics'} onClick={() => setTab('diagnostics')}><Server size={16} />运行诊断</button><button role="tab" id="projection-tab" aria-controls="projection-panel" aria-selected={tab === 'projection'} onClick={() => setTab('projection')}><Layers3 size={16} />投影验证</button></div>
+        <div className="workspace-tabs" role="tablist" aria-label="工作区视图"><button role="tab" id="map-tab" aria-controls="map-panel" aria-selected={tab === 'map'} onClick={() => setTab('map')}><MapIcon size={16} />地图工作区</button><button role="tab" id="analysis-tab" aria-controls="analysis-panel" aria-selected={tab === 'analysis'} onClick={() => setTab('analysis')}><Layers3 size={16} />用地分析</button><button role="tab" id="diagnostics-tab" aria-controls="diagnostics-panel" aria-selected={tab === 'diagnostics'} onClick={() => setTab('diagnostics')}><Server size={16} />运行诊断</button><button role="tab" id="projection-tab" aria-controls="projection-panel" aria-selected={tab === 'projection'} onClick={() => setTab('projection')}><Layers3 size={16} />投影验证</button></div>
         <TaskStrip tasks={state.workspace?.tasks ?? []} disabled={!!state.busy || state.needsReopen} onCancel={(id) => void state.cancelTask(id)} />
-        <div hidden={tab !== 'map'} role="tabpanel" id="map-panel" aria-labelledby="map-tab"><VectorWorkspace key={state.sessionId} bridge={bridge} state={state} fitRequest={fitRequest?.sessionId === state.sessionId ? fitRequest : null} onFit={fit} /></div>
-        {tab !== 'map' && <div className="workspace-content">
+        <div hidden={tab !== 'map'} role="tabpanel" id="map-panel" aria-labelledby="map-tab"><VectorWorkspace key={state.sessionId} bridge={bridge} state={state} visible={tab === 'map'} fitRequest={fitRequest?.sessionId === state.sessionId ? fitRequest : null} onFit={fit} /></div>
+        <div hidden={tab !== 'analysis'} role="tabpanel" id="analysis-panel" aria-labelledby="analysis-tab"><AnalysisWorkspace key={state.sessionId} bridge={bridge} state={state} visible={tab === 'analysis'} onShowMap={() => setTab('map')} /></div>
+        {(tab === 'diagnostics' || tab === 'projection') && <div className="workspace-content">
           <div className="workspace-heading"><h1>{tab === 'diagnostics' ? '本地 GIS 引擎' : '投影验证'}</h1><button className="button primary" disabled={!ready || locked || !!state.activeTask} onClick={() => void state.diagnose()}>{state.busy === '运行 GIS 验证' ? <LoaderCircle size={16} className="spin" /> : <Play size={16} />}运行验证</button></div>
           {tab === 'diagnostics' ? <div role="tabpanel" id="diagnostics-panel" aria-labelledby="diagnostics-tab">
             <section className="diagnostic-section"><div className="section-heading"><h2>GIS 诊断</h2><span className={`diagnostic-state ${state.report ? state.report.ok ? 'success' : 'danger' : ''}`}>{state.busy === '运行 GIS 验证' ? <><LoaderCircle size={14} className="spin" />正在运行</> : state.report ? <>{state.report.ok ? <Check size={14} /> : <AlertCircle size={14} />}{state.report.ok ? '全部通过' : '存在失败项'}</> : <><Circle size={12} />未运行</>}</span></div><DiagnosticReport report={state.report} />{state.report && <button className="text-button" onClick={() => setTab('projection')}>查看投影验证<ArrowRight size={15} /></button>}</section>
@@ -120,7 +122,7 @@ export default function App({ bridge = desktop }: { bridge?: DesktopBridge }) {
       </main>
     </div>
 
-    <footer className="statusbar"><span className="status-message" role="status" aria-live="polite">{state.busy ? <><LoaderCircle className="spin" size={13} />{state.busy}</> : <><span className={`status-dot ${state.runtime ? 'online' : ''}`} />{state.notice || (state.runtime ? '就绪' : state.native ? '等待引擎连接' : '本地引擎不可用')}</>}</span><span>分析 CRS · {state.draft?.analysisCrs || '未指定'}</span><span className="version-label">0.5.0</span></footer>
+    <footer className="statusbar"><span className="status-message" role="status" aria-live="polite">{state.busy ? <><LoaderCircle className="spin" size={13} />{state.busy}</> : <><span className={`status-dot ${state.runtime ? 'online' : ''}`} />{state.notice || (state.runtime ? '就绪' : state.native ? '等待引擎连接' : '本地引擎不可用')}</>}</span><span>分析 CRS · {state.draft?.analysisCrs || '未指定'}</span><span className="version-label">0.6.0</span></footer>
 
     {importing && <ImportVector bridge={bridge} state={state} onClose={() => setImporting(false)} />}
     {importingTable && <ImportTable key={state.sessionId} bridge={bridge} state={state} onClose={() => setImportingTable(false)} />}

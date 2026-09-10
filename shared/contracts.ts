@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 5 as const;
+export const PROTOCOL_VERSION = 6 as const;
 
 export interface ViewState {
   center: [number, number];
@@ -11,7 +11,7 @@ export interface Project {
   description: string;
   createdAt: string;
   updatedAt: string;
-  schemaVersion: 5;
+  schemaVersion: 6;
   projectPath: string;
   analysisCrs: string | null;
   displayCrs: string;
@@ -19,7 +19,7 @@ export interface Project {
 }
 
 export interface RuntimeInfo {
-  protocolVersion: 5;
+  protocolVersion: 6;
   engineVersion: string;
   pythonVersion: string;
   packaged: boolean;
@@ -74,6 +74,9 @@ export type EngineMethod =
   | "project.saveAs"
   | "project.close"
   | "diagnostics.run"
+  | "analysis.run"
+  | "analysis.result"
+  | "analysis.exportCsv"
   | "source.inspect"
   | "source.status"
   | "source.relocate"
@@ -298,7 +301,7 @@ export interface MapLayer {
 
 export interface Task {
   id: string;
-  kind: "import" | "export" | "points" | "save_as" | "relocate";
+  kind: "import" | "export" | "points" | "save_as" | "relocate" | "analysis";
   status: "running" | "completed" | "failed" | "cancelled" | "interrupted";
   stage: string;
   completed: number | null;
@@ -373,4 +376,84 @@ export interface FeatureResult {
   row: AttributeRow;
   feature: DisplayFeature | null;
   boundsWgs84: Bounds | null;
+}
+
+export interface AnalysisOptions {
+  operation: "clip" | "intersect";
+  name: string;
+  inputDatasetId: string;
+  overlayDatasetId: string;
+  inputClassField: string;
+  overlayClassField: string | null;
+  classificationStandard: string;
+  analysisCrs: string;
+  crsReason: string;
+}
+
+export interface AnalysisInput {
+  datasetId: string;
+  version: string;
+  classField: string | null;
+  featureCount: number;
+  crsWkt: string;
+}
+
+export interface AnalysisTransform {
+  sourceCrsWkt: string;
+  targetCrsWkt: string;
+  operation: string;
+  accuracyM: number | null;
+  grids: { name: string; available: boolean }[];
+}
+
+export interface AnalysisRecord {
+  schemaVersion: 1;
+  id: string;
+  resultDatasetId: string;
+  operation: "clip" | "intersect";
+  name: string;
+  createdAt: string;
+  inputs: [AnalysisInput, AnalysisInput];
+  classificationStandard: string;
+  analysisCrsWkt: string;
+  analysisCrsAuthority: string | null;
+  crsReason: string;
+  metresPerUnit: number;
+  areaMethod: "projected_planar";
+  overlapPolicy: "reject_positive_area";
+  geometryPolicy: "no_repair_no_snap_no_sliver_removal";
+  coverageExplanation: string;
+  studyAreaM2: number;
+  recordAreaM2: number;
+  coveredAreaM2: number;
+  uncoveredAreaM2: number;
+  outputFeatureCount: number;
+  boundaryContactCount: number;
+  categoryCount: number;
+  candidatePairs: number;
+  transforms: AnalysisTransform[];
+  versions: Record<string, string>;
+  warnings: string[];
+}
+
+export interface AnalysisStatistic {
+  inputClass: string | null;
+  overlayClass: string | null;
+  featureCount: number;
+  areaM2: number;
+  areaHa: number;
+  areaMu: number;
+  studyRatio: number;
+  coverageRatio: number | null;
+}
+
+export interface AnalysisResultPage {
+  datasetId: string;
+  version: string;
+  record: AnalysisRecord;
+  rows: AnalysisStatistic[];
+  total: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
 }

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+import time
 from contextlib import closing
 from pathlib import Path
 
@@ -12,10 +13,12 @@ from pyproj import Transformer
 
 from .errors import DomainError, InvalidParamsError
 from .vectors import _decode_geometry, canonical_value
+from .capacity import MAX_FEATURES, MAX_GEOMETRY_VERTICES
 
 MAX_QUERY_BYTES = 2 * 1024 * 1024
 MAX_DISPLAY_VERTICES = 100_000
 MAX_DISPLAY_FEATURES = 2_000
+SQL_SECONDS = 1.5
 
 
 def _integer(value, name: str, minimum: int, maximum: int) -> int:
@@ -32,6 +35,8 @@ def _connect(path: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA trusted_schema=OFF")
+    deadline = time.monotonic() + SQL_SECONDS
+    connection.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
     return connection
 
 
@@ -108,7 +113,7 @@ def _filter(dataset: dict, value) -> tuple[str, list]:
 
 
 def attribute_page(dataset: dict, managed_path: Path, params: dict) -> dict:
-    offset = _integer(params.get("offset", 0), "offset", 0, 100_000)
+    offset = _integer(params.get("offset", 0), "offset", 0, MAX_FEATURES)
     limit = _integer(params.get("limit", 200), "limit", 1, 500)
     sort_field = params.get("sortField")
     descending = params.get("descending", False)
@@ -135,6 +140,8 @@ def attribute_page(dataset: dict, managed_path: Path, params: dict) -> dict:
                          "rows": [_row(dataset, row) for row in records], "total": total, "offset": offset, "limit": limit,
                          "hasMore": offset + len(records) < total, "truncated": False})
     except sqlite3.Error as exc:
+        if getattr(exc, "sqlite_errorcode", None) == sqlite3.SQLITE_INTERRUPT:
+            raise DomainError("Attribute query exceeded its time budget", kind="query_timeout") from exc
         raise DomainError("Could not read snapshot attributes", kind="query_failed", detail=str(exc)) from exc
 
 
@@ -202,6 +209,8 @@ def viewport(dataset: dict, managed_path: Path, params: dict) -> dict:
                 for index, geometry in enumerate(geometries):
                     if geometry is None or shapely.is_empty(geometry):
                         continue
+                    if shapely.get_num_coordinates(geometry) > MAX_GEOMETRY_VERTICES:
+                        raise DomainError("Feature exceeds the display vertex limit", kind="query_limit")
                     display = _display_geometry(geometry, to_display)
                     if not shapely.intersects(display, viewport_box):
                         continue

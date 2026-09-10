@@ -9,13 +9,13 @@ import type { EngineMethod, ProbeReport, Project, RuntimeInfo, Task } from '../.
 vi.mock('./components/VectorMap', () => ({ VectorMap: () => <div data-testid="vector-map" /> }));
 
 const project: Project = {
-  id: 'test-project', name: '用地检查', description: '', schemaVersion: 5,
+  id: 'test-project', name: '用地检查', description: '', schemaVersion: 6,
   createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z',
   projectPath: 'C:/test/用地检查/project.spa', analysisCrs: null, displayCrs: 'EPSG:3857',
   viewState: { center: [114, 27.1], zoom: 5 },
 };
 const runtime: RuntimeInfo = {
-  protocolVersion: 5, engineVersion: '0.5.0', pythonVersion: 'test-python', packaged: false,
+  protocolVersion: 6, engineVersion: '0.5.0', pythonVersion: 'test-python', packaged: false,
   versions: { GDAL: 'test-gdal' }, drivers: { GPKG: 'test-driver' }, logPath: 'C:/test/engine.log',
 };
 const report: ProbeReport = {
@@ -37,8 +37,9 @@ function fixtureBridge(native = true) {
       case 'project.save': return { ...project, ...params, updatedAt: '2026-09-09T01:00:00Z' };
       case 'project.close': return { closed: true as const };
       case 'workspace.get': return { projectId: project.id, datasets: [], layers: [], tasks };
+      case 'analysis.run':
       case 'vector.import': {
-        const task: Task = { id: 'import-1', kind: 'import', status: 'running', stage: 'inspect', completed: null, total: null, createdAt: project.createdAt, updatedAt: project.createdAt, datasetId: null, destination: null, error: null };
+        const task: Task = { id: 'import-1', kind: method === 'analysis.run' ? 'analysis' : 'import', status: 'running', stage: 'inspect', completed: null, total: null, createdAt: project.createdAt, updatedAt: project.createdAt, datasetId: null, destination: null, error: null };
         tasks = [task];
         return task;
       }
@@ -61,7 +62,7 @@ function fixtureBridge(native = true) {
     chooseRaster: vi.fn(async () => 'C:/test/image.tif'),
     chooseSource: vi.fn(async () => 'C:/test/moved.gpkg'),
     chooseRasterExport: vi.fn(async () => 'C:/test/export.tif'),
-    chooseExport: vi.fn(async () => 'C:/test/export.gpkg'),
+    chooseCsvExport: vi.fn(async () => 'C:/test/statistics.csv'), chooseExport: vi.fn(async () => 'C:/test/export.gpkg'),
     join: vi.fn(async (...paths: string[]) => paths.join('/')),
     diagnosticDirectory: vi.fn(async (path?: string) => path ? 'C:/test/用地检查/cache' : 'C:/test/app-cache'),
     onClose: vi.fn(async (handler) => { closeHandler = handler; return () => undefined; }),
@@ -243,6 +244,34 @@ describe('project transitions', () => {
     await act(async () => { await result.current.refreshWorkspace(); });
     expect(request.mock.calls).toHaveLength(count);
     expect(result.current.needsReopen).toBe(true);
+  });
+
+  it('releases global busy after starting analysis and permits cancellation while it runs', async () => {
+    const { result, request } = await openFixture();
+    const options = { operation: 'clip' as const, name: 'Result', inputDatasetId: 'land', overlayDatasetId: 'boundary', inputClassField: 'code', overlayClassField: null, classificationStandard: '2026', analysisCrs: 'EPSG:4547', crsReason: 'Within area of use' };
+    await act(async () => { await result.current.runAnalysis(options); });
+    expect(request).toHaveBeenCalledWith('analysis.run', { path: project.projectPath, ...options });
+    expect(result.current.busy).toBeNull();
+    expect(result.current.activeTask?.kind).toBe('analysis');
+    await act(async () => result.current.setView({ center: [115, 28], zoom: 8 }));
+    expect(result.current.draft?.viewState.zoom).toBe(8);
+    await act(async () => { await result.current.cancelTask('import-1'); });
+    expect(result.current.activeTask).toBeNull();
+    expect(result.current.workspace?.tasks[0].status).toBe('cancelled');
+  });
+
+  it('retries a temporarily saturated task poll instead of leaving it permanently running', async () => {
+    const { result, request } = await openFixture();
+    const original = request.getMockImplementation()!;
+    let polls = 0;
+    request.mockImplementation(async (method, params = {}) => {
+      if (method === 'task.get' && ++polls === 1) throw { message: 'busy', data: { kind: 'REQUEST_QUEUE_FULL' } };
+      if (method === 'task.get') return { ...(await original(method, params) as Task), status: 'completed' };
+      return original(method, params);
+    });
+    await act(async () => { await result.current.importVector({ sourcePath: 'C:/land.gpkg', sourceLayer: 'land', encoding: null, assignedCrs: null }); });
+    await waitFor(() => expect(polls).toBeGreaterThanOrEqual(2), { timeout: 2500 });
+    expect(result.current.runtime).not.toBeNull();
   });
 });
 

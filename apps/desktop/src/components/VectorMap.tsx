@@ -15,6 +15,8 @@ import type { DesktopBridge } from '../bridge';
 import { normalizeError } from '../bridge';
 import { categoryColor, translucent } from '../vector-style';
 import { createRasterRenderer, rasterFrame, type RasterFrame } from '../raster-display';
+import { latestRequest } from '../latest-request';
+import { boundedDisplayLayers, boundedFeatures, DISPLAY_VERTEX_BUDGET, viewportLayerBudget } from '../vector-budget';
 
 export interface FitRequest { key: number; bounds: Bounds }
 
@@ -52,6 +54,7 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
   const mapLayers = useRef(new globalThis.Map<string, VectorLayer<VectorSource> | ImageLayer<ImageStatic>>());
   const rasterQueues = useRef(new globalThis.Map<string, ReturnType<typeof createRasterRenderer>>());
   const imageRevision = useRef(0);
+  const vectorQueue = useRef<ReturnType<typeof latestRequest<() => Promise<void>, void>> | null>(null);
   const highlight = useRef<VectorSource | null>(null);
   const callbacks = useRef({ onSelect, onSelectPixel, onViewChange, onFailure, enabled });
   callbacks.current = { onSelect, onSelectPixel, onViewChange, onFailure, enabled };
@@ -64,8 +67,9 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
   const [rasterIssues, setRasterIssues] = useState<Record<string, string>>({});
   const datasetMap = new globalThis.Map(datasets.map((dataset) => [dataset.id, dataset]));
   const visible = layers.filter((layer) => layer.visible && datasetMap.get(layer.datasetId)?.boundsWgs84 && datasetMap.get(layer.datasetId)?.crsWkt);
-  const vectorLayers = visible.filter((layer) => datasetMap.get(layer.datasetId)?.kind === 'vector');
-  const rasterLayers = visible.filter((layer) => datasetMap.get(layer.datasetId)?.kind === 'raster');
+  const displayed = boundedDisplayLayers(visible);
+  const vectorLayers = displayed.filter((layer) => datasetMap.get(layer.datasetId)?.kind === 'vector');
+  const rasterLayers = displayed.filter((layer) => datasetMap.get(layer.datasetId)?.kind === 'raster');
   const queryKey = JSON.stringify(vectorLayers.map((layer) => [layer.id, layer.datasetId, datasetMap.get(layer.datasetId)?.version, layer.categoryField]));
   const rasterKey = JSON.stringify(rasterLayers.map((layer) => [layer.id, layer.datasetId, datasetMap.get(layer.datasetId)?.version, layer.rasterStyle]));
   const bboxKey = JSON.stringify(bbox);
@@ -81,6 +85,7 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
       view: new View({ projection: 'EPSG:3857', center: fromLonLat(initialView.center), zoom: initialView.zoom, minZoom: 1, maxZoom: 24, enableRotation: false, multiWorld: false }),
     });
     instance.current = map;
+    vectorQueue.current = latestRequest<() => Promise<void>, void>((request) => request(), { result: () => {}, error: (cause) => callbacks.current.onFailure(cause) });
     highlight.current = selectedSource;
     map.on('moveend', () => {
       setBbox(geographicBounds(map));
@@ -89,9 +94,12 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
       const center = toLonLat(map.getView().getCenter() ?? [0, 0]);
       if (callbacks.current.enabled) callbacks.current.onViewChange({ center: [Number(center[0].toFixed(9)), Number(center[1].toFixed(9))], zoom: Number((map.getView().getZoom() ?? 5).toFixed(6)) });
     });
+    let coordinateFrame = 0;
+    let latestCoordinate = '';
     map.on('pointermove', (event) => {
       const coordinates = toLonLat(event.coordinate);
-      setCoordinate(`${coordinates[0].toFixed(5)}, ${coordinates[1].toFixed(5)}`);
+      latestCoordinate = `${coordinates[0].toFixed(5)}, ${coordinates[1].toFixed(5)}`;
+      if (!coordinateFrame) coordinateFrame = requestAnimationFrame(() => { coordinateFrame = 0; setCoordinate(latestCoordinate); });
     });
     map.on('singleclick', (event) => {
       if (!callbacks.current.enabled) return;
@@ -111,7 +119,7 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
     const observer = new ResizeObserver(resize);
     observer.observe(target.current);
     resize();
-    return () => { observer.disconnect(); for (const queue of rasterQueues.current.values()) queue.dispose(); rasterQueues.current.clear(); map.dispose(); instance.current = null; highlight.current = null; mapLayers.current.clear(); };
+    return () => { cancelAnimationFrame(coordinateFrame); vectorQueue.current?.dispose(); vectorQueue.current = null; observer.disconnect(); for (const queue of rasterQueues.current.values()) queue.dispose(); rasterQueues.current.clear(); map.dispose(); instance.current = null; highlight.current = null; mapLayers.current.clear(); };
   }, []);
 
   useEffect(() => {
@@ -136,7 +144,7 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
         mapLayers.current.set(definition.id, layer);
         map.addLayer(layer);
       }
-      layer.setVisible(definition.visible && !!dataset?.boundsWgs84 && !!dataset?.crsWkt);
+      layer.setVisible(displayed.some((item) => item.id === definition.id));
       layer.setOpacity(definition.opacity);
       layer.setZIndex(layers.length - index);
       if (!(layer instanceof VectorLayer)) return;
@@ -151,26 +159,37 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     setIssues([]);
     setLoading(false);
     if (!enabled || !path || !bbox || !vectorLayers.length) return;
     const timer = setTimeout(() => {
       setLoading(true);
-      void (async () => {
+      vectorQueue.current?.push(async () => {
         const notices: string[] = [];
-        for (const layer of vectorLayers) {
+        const budget = viewportLayerBudget(vectorLayers.length);
+        let remainingVertices = DISPLAY_VERTEX_BUDGET;
+        for (const layer of vectorLayers.slice(budget.layers)) {
+          const displayLayer = mapLayers.current.get(layer.id);
+          if (displayLayer instanceof VectorLayer) displayLayer.getSource()?.clear();
+        }
+        if (vectorLayers.length > budget.layers) notices.push(`地图显示最多 ${budget.layers} 个矢量图层；请隐藏上层图层以查看其余图层。完整分析不受影响。`);
+        for (const layer of vectorLayers.slice(0, budget.layers)) {
           if (cancelled) return;
           try {
             const dataset = datasetMap.get(layer.datasetId)!;
-            const result = await bridge.request('vector.viewport', { path, datasetId: dataset.id, bbox, limit: 2000, propertyFields: layer.categoryField ? [layer.categoryField] : [] });
+            const result = await bridge.request('vector.viewport', { path, datasetId: dataset.id, bbox, limit: budget.perLayer, propertyFields: layer.categoryField ? [layer.categoryField] : [] }, controller.signal);
             if (cancelled) return;
             if (result.datasetId !== dataset.id || result.version !== dataset.version) throw new Error('显示数据版本不匹配，请刷新工作区。');
             const displayLayer = mapLayers.current.get(layer.id);
             const source = displayLayer instanceof VectorLayer ? displayLayer.getSource() : null;
-            const features = new GeoJSON().readFeatures(result.collection, { dataProjection: 'EPSG:4326', featureProjection: 'EPSG:3857' });
+            const bounded = boundedFeatures(result.collection.features, remainingVertices);
+            remainingVertices -= bounded.vertices;
+            const features = new GeoJSON().readFeatures({ ...result.collection, features: bounded.features }, { dataProjection: 'EPSG:4326', featureProjection: 'EPSG:3857' });
             source?.clear();
             source?.addFeatures(features);
             if (result.truncated) notices.push(`${layer.name}：当前显示 ${result.returnedCount} 个要素，结果已截断`);
+            if (bounded.truncated) notices.push(`${layer.name}：达到地图顶点预算，部分显示几何已省略；完整分析不受影响`);
           } catch (cause) {
             if (cancelled) return;
             const displayLayer = mapLayers.current.get(layer.id);
@@ -180,14 +199,15 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
           }
         }
         if (!cancelled) { setIssues(notices); setLoading(false); }
-      })();
+      });
     }, 180);
-    return () => { cancelled = true; clearTimeout(timer); };
+    return () => { cancelled = true; controller.abort(); clearTimeout(timer); vectorQueue.current?.clear(); };
   }, [bridge, path, queryKey, bboxKey, enabled]);
 
   useEffect(() => {
     setRasterIssues({});
     if (!enabled || !path || !frame) return;
+    const controller = new AbortController();
     const timer = setTimeout(() => {
       for (const definition of rasterLayers) {
         const dataset = datasetMap.get(definition.datasetId);
@@ -214,10 +234,10 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
           });
           rasterQueues.current.set(definition.id, queue);
         }
-        queue.push({ path, datasetId: dataset.id, version: dataset.version, ...frame, style: definition.rasterStyle });
+        queue.push({ path, datasetId: dataset.id, version: dataset.version, ...frame, style: definition.rasterStyle, signal: controller.signal });
       }
     }, 180);
-    return () => { imageRevision.current += 1; clearTimeout(timer); for (const queue of rasterQueues.current.values()) queue.clear(); };
+    return () => { controller.abort(); imageRevision.current += 1; clearTimeout(timer); for (const queue of rasterQueues.current.values()) queue.clear(); };
   }, [bridge, path, rasterKey, frameKey, enabled]);
 
   useEffect(() => {
@@ -239,6 +259,7 @@ export function VectorMap({ bridge, path, layers, datasets, initialView, enabled
   const zoom = (amount: number) => { const view = instance.current?.getView(); if (view) view.animate({ zoom: (view.getZoom() ?? 5) + amount, duration: 150 }); };
   return <div className="vector-map" data-testid="vector-map">
     <div className="map-target" ref={target} tabIndex={0} aria-label="地图" />
+    {visible.length > displayed.length && <div className="map-budget-notice" role="status">当前仅显示前 {displayed.length} 个图层（矢量与栅格合计）；隐藏上层图层可查看其余图层。完整分析不受影响。</div>}
     {!visible.length && <div className="map-empty"><Crosshair size={30} strokeWidth={1.3} /><span>{layers.length ? '没有可显示的图层' : '未添加图层'}</span></div>}
     <div className="map-controls"><button className="icon-button" aria-label="地图放大" title="地图放大" disabled={locked} onClick={() => zoom(1)}><Plus size={18} /></button><button className="icon-button" aria-label="地图缩小" title="地图缩小" disabled={locked} onClick={() => zoom(-1)}><Minus size={18} /></button></div>
     {(loading || !!rasterBusy.size) && <span className="map-loading" role="status">读取显示数据</span>}

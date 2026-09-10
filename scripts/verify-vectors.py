@@ -57,6 +57,19 @@ class Rpc:
         self.responses.put(b"")
 
     def call(self, method: str, params: dict | None = None):
+        deadline = time.monotonic() + 30
+        while True:
+            response = self._request(method, params)
+            if response.get("error", {}).get("data", {}).get("kind") != "query_unready":
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError(f"Query warmup deadline: {response}")
+            time.sleep(0.1)
+        if "error" in response:
+            raise AssertionError(f"{method}: {response['error']}")
+        return response["result"]
+
+    def _request(self, method: str, params: dict | None = None):
         self.next_id += 1
         assert self.process.stdin
         request = {"jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params or {}}
@@ -67,12 +80,10 @@ class Rpc:
             raise AssertionError(f"Unusable RPC frame for {method}")
         response = json.loads(line)
         assert response["jsonrpc"] == "2.0" and response["id"] == self.next_id, response
-        if "error" in response:
-            raise AssertionError(f"{method}: {response['error']}")
-        return response["result"]
+        return response
 
     def wait_task(self, path: str, task: dict):
-        deadline = time.monotonic() + 180
+        deadline = time.monotonic() + 930
         while task["status"] == "running":
             if time.monotonic() > deadline:
                 raise AssertionError(f"Task deadline: {task}")
@@ -97,11 +108,11 @@ class Rpc:
 
 def verify(rpc: Rpc, output: Path, checks: list[str], export_directory: Path | None = None) -> dict:
     runtime = rpc.call("runtime.info")
-    assert runtime["protocolVersion"] == 5 and runtime["engineVersion"] == "0.5.0", runtime
+    assert runtime["protocolVersion"] == 6 and runtime["engineVersion"] == "0.6.0", runtime
     assert "pyarrow" in runtime["versions"], runtime
     project = rpc.call("project.create", {"directory": str(output / "\u7528\u5730\u9879\u76ee"), "name": "\u7528\u5730\u9a8c\u6536"})
     path = project["projectPath"]
-    assert project["schemaVersion"] == 5
+    assert project["schemaVersion"] == 6
     source = output / "\u5408\u6210\u7528\u5730.geojson"
     seed_source(source)
     original_hash = hashlib.sha256(source.read_bytes()).hexdigest()
@@ -112,7 +123,7 @@ def verify(rpc: Rpc, output: Path, checks: list[str], export_directory: Path | N
                      "encoding": None, "assignedCrs": None}
     task = rpc.call("vector.import", import_params)
     assert task["status"] == "running", task
-    assert rpc.call("runtime.info")["protocolVersion"] == 5
+    assert rpc.call("runtime.info")["protocolVersion"] == 6
     task = rpc.wait_task(path, task)
     workspace = rpc.call("workspace.get", {"path": path})
     assert workspace["projectId"] == project["id"] and len(workspace["datasets"]) == 1, workspace

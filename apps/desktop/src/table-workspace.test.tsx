@@ -26,8 +26,8 @@ afterAll(() => dialogMethods.forEach((method, index) => {
   else Reflect.deleteProperty(HTMLDialogElement.prototype, method);
 }));
 
-const project: Project = { id: 'tables-project', name: 'Tables', description: '', schemaVersion: 5, createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z', projectPath: 'C:/test/project.spa', analysisCrs: null, displayCrs: 'EPSG:3857', viewState: { center: [114, 27], zoom: 5 } };
-const runtime = { protocolVersion: 5, engineVersion: '0.5.0', pythonVersion: 'test', packaged: false, versions: {}, drivers: {}, logPath: 'test' };
+const project: Project = { id: 'tables-project', name: 'Tables', description: '', schemaVersion: 6, createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z', projectPath: 'C:/test/project.spa', analysisCrs: null, displayCrs: 'EPSG:3857', viewState: { center: [114, 27], zoom: 5 } };
+const runtime = { protocolVersion: 6, engineVersion: '0.5.0', pythonVersion: 'test', packaged: false, versions: {}, drivers: {}, logPath: 'test' };
 const table: TableDataset = {
   id: 'table-1', version: 'table-version', name: 'Coordinates', kind: 'table',
   source: { path: 'C:/test/points.csv', layer: 'records', driver: 'CSV', fingerprint: 'fixture', encoding: 'utf-8-sig', assignedCrs: null, crsWkt: null, metadata: { delimiter: ',' } },
@@ -78,7 +78,7 @@ function fixtureBridge() {
   });
   const bridge: DesktopBridge = {
     available: () => true, request: request as DesktopBridge['request'], chooseParent: vi.fn(async () => 'C:/test'), chooseProject: vi.fn(async () => project.projectPath),
-    chooseVector: vi.fn(async () => 'C:/test/land.gpkg'), chooseGdb: vi.fn(async () => 'C:/test/land.gdb'), chooseExport: vi.fn(async () => 'C:/test/export.gpkg'), selectTableSource: vi.fn(async () => tableOptions.sourcePath),
+    chooseVector: vi.fn(async () => 'C:/test/land.gpkg'), chooseGdb: vi.fn(async () => 'C:/test/land.gdb'), chooseCsvExport: vi.fn(async () => 'C:/test/statistics.csv'), chooseExport: vi.fn(async () => 'C:/test/export.gpkg'), selectTableSource: vi.fn(async () => tableOptions.sourcePath),
     chooseSource: vi.fn(async () => 'C:/test/moved.gpkg'), chooseRaster: vi.fn(async () => 'C:/test/image.tif'), chooseRasterExport: vi.fn(async () => 'C:/test/export.tif'),
     join: vi.fn(async (...parts) => parts.join('/')), diagnosticDirectory: vi.fn(async () => 'C:/test/cache'), onClose: vi.fn(async () => () => undefined), closeWindow: vi.fn(async () => undefined),
   };
@@ -176,7 +176,7 @@ describe('table attribute workspace', () => {
     fireEvent.change(screen.getByLabelText('筛选字段'), { target: { value: 'code' } });
     fireEvent.change(screen.getByLabelText('筛选值'), { target: { value: '001' } });
     fireEvent.click(screen.getByRole('button', { name: '应用筛选' }));
-    await waitFor(() => expect(request).toHaveBeenCalledWith('table.page', { path: project.projectPath, datasetId: table.id, ...initialAttributeQuery, filter: { field: 'code', operator: 'contains', value: '001' } }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith('table.page', { path: project.projectPath, datasetId: table.id, ...initialAttributeQuery, filter: { field: 'code', operator: 'contains', value: '001' } }, expect.any(AbortSignal)));
     fireEvent.change(screen.getByLabelText('筛选值'), { target: { value: 'missing' } });
     fireEvent.click(screen.getByRole('button', { name: '应用筛选' }));
     expect(await screen.findByText('没有符合条件的记录')).toBeTruthy();
@@ -206,12 +206,12 @@ describe('table import preview', () => {
     const close = vi.fn();
     render(<ImportTable bridge={bridge} state={state} onClose={close} />);
     fireEvent.click(screen.getByRole('button', { name: '选择表格文件' }));
-    await waitFor(() => expect(state.inspectTable).toHaveBeenCalledWith(tableOptions));
+    await waitFor(() => expect(state.inspectTable).toHaveBeenCalledWith(tableOptions, expect.any(AbortSignal)));
     fireEvent.change(screen.getByLabelText('分隔符'), { target: { value: '\t' } });
     fireEvent.change(screen.getByLabelText('表格字符编码'), { target: { value: 'GBK' } });
     fireEvent.change(screen.getByLabelText('表头行'), { target: { value: '2' } });
     const options = { ...tableOptions, encoding: 'GBK', delimiter: '\t', headerRow: 2 };
-    await waitFor(() => expect(state.inspectTable).toHaveBeenLastCalledWith(options));
+    await waitFor(() => expect(state.inspectTable).toHaveBeenLastCalledWith(options, expect.any(AbortSignal)));
     await waitFor(() => expect(screen.getByRole('button', { name: '导入表格' }).hasAttribute('disabled')).toBe(false));
     fireEvent.click(screen.getByRole('button', { name: '导入表格' }));
     await waitFor(() => expect(state.importTable).toHaveBeenCalledWith(options));
@@ -225,7 +225,7 @@ describe('table import preview', () => {
     const state = modalState({ inspectTable });
     render(<ImportTable bridge={bridge} state={state} onClose={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: '选择表格文件' }));
-    await waitFor(() => expect(inspectTable).toHaveBeenCalledWith({ ...tableOptions, sourcePath: 'C:/test/points.xlsx', sheet: null, encoding: null, delimiter: null }));
+    await waitFor(() => expect(inspectTable).toHaveBeenCalledWith({ ...tableOptions, sourcePath: 'C:/test/points.xlsx', sheet: null, encoding: null, delimiter: null }, expect.any(AbortSignal)));
     expect(screen.getByLabelText('工作表')).toHaveProperty('value', '');
     expect(screen.getByRole('button', { name: '导入表格' }).hasAttribute('disabled')).toBe(true);
     expect(screen.queryByRole('region', { name: '表格预览' })).toBeNull();

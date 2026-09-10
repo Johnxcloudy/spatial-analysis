@@ -12,11 +12,15 @@ export function ImportRaster({ bridge, state, onClose }: { bridge: DesktopBridge
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const sequence = useRef(0);
+  const controller = useRef<AbortController | null>(null);
   const locked = !!state.busy || state.needsReopen;
-  useEffect(() => () => { sequence.current += 1; }, []);
-  useEffect(() => { if (state.needsReopen) { sequence.current += 1; setLoading(false); setInspection(null); } }, [state.needsReopen]);
+  useEffect(() => () => { sequence.current += 1; controller.current?.abort(); }, []);
+  useEffect(() => { if (state.needsReopen) { sequence.current += 1; controller.current?.abort(); setLoading(false); setInspection(null); } }, [state.needsReopen]);
   const choose = async () => {
     const token = ++sequence.current;
+    controller.current?.abort();
+    const currentController = new AbortController();
+    controller.current = currentController;
     setLoading(true);
     setError('');
     try {
@@ -24,7 +28,7 @@ export function ImportRaster({ bridge, state, onClose }: { bridge: DesktopBridge
       if (token !== sequence.current || !path) return;
       setSourcePath(path);
       setInspection(null);
-      const result = await state.inspectRaster(path);
+      const result = await state.inspectRaster(path, currentController.signal);
       if (token === sequence.current) setInspection(result);
     } catch (cause) {
       if (token !== sequence.current) return;

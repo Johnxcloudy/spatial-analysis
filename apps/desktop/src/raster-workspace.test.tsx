@@ -18,8 +18,8 @@ beforeAll(() => Object.defineProperties(HTMLDialogElement.prototype, { showModal
 afterAll(() => methods.forEach((method, index) => { const descriptor = descriptors[index]; if (descriptor) Object.defineProperty(HTMLDialogElement.prototype, method, descriptor); else Reflect.deleteProperty(HTMLDialogElement.prototype, method); }));
 afterEach(cleanup);
 
-const project: Project = { id: 'raster-project', name: 'Raster project', description: '', schemaVersion: 5, createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z', projectPath: 'C:/test/raster/project.spa', analysisCrs: null, displayCrs: 'EPSG:3857', viewState: { center: [114, 27], zoom: 6 } };
-const runtime = { protocolVersion: 5, engineVersion: '0.5.0', pythonVersion: 'test', packaged: false, versions: {}, drivers: {}, logPath: 'fixture' };
+const project: Project = { id: 'raster-project', name: 'Raster project', description: '', schemaVersion: 6, createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z', projectPath: 'C:/test/raster/project.spa', analysisCrs: null, displayCrs: 'EPSG:3857', viewState: { center: [114, 27], zoom: 6 } };
+const runtime = { protocolVersion: 6, engineVersion: '0.5.0', pythonVersion: 'test', packaged: false, versions: {}, drivers: {}, logPath: 'fixture' };
 const style: RasterStyle = { mode: 'gray', bands: [1], ranges: [[0, 100]], resampling: 'nearest' };
 const raster: RasterDataset = {
   id: 'raster-1', name: 'Terrain', kind: 'raster', version: 'raster-version', relativePath: 'rasters/raster.tif', createdAt: project.createdAt,
@@ -51,7 +51,7 @@ function fixture(unknown = false) {
     if (method === 'vector.page') return { datasetId: vector.id, version: vector.version, fields: [], rows: [], total: 0, offset: 0, limit: 200, hasMore: false, truncated: false };
     throw new Error(`Unexpected fixture method ${method}`);
   });
-  const bridge: DesktopBridge = { available: () => true, request: request as DesktopBridge['request'], chooseParent: vi.fn(async () => 'C:/test'), chooseProject: vi.fn(async () => project.projectPath), chooseVector: vi.fn(async () => 'C:/test/vector.gpkg'), chooseGdb: vi.fn(async () => 'C:/test/vector.gdb'), selectTableSource: vi.fn(async () => 'C:/test/table.csv'), chooseSource: vi.fn(async () => 'C:/test/moved.gpkg'), chooseRaster: vi.fn(async () => raster.source.path), chooseRasterExport: vi.fn(async () => 'C:/test/export.tif'), chooseExport: vi.fn(async () => 'C:/test/export.gpkg'), join: vi.fn(async (...parts) => parts.join('/')), diagnosticDirectory: vi.fn(async () => 'C:/test/cache'), onClose: vi.fn(async () => () => undefined), closeWindow: vi.fn(async () => undefined) };
+  const bridge: DesktopBridge = { available: () => true, request: request as DesktopBridge['request'], chooseParent: vi.fn(async () => 'C:/test'), chooseProject: vi.fn(async () => project.projectPath), chooseVector: vi.fn(async () => 'C:/test/vector.gpkg'), chooseGdb: vi.fn(async () => 'C:/test/vector.gdb'), selectTableSource: vi.fn(async () => 'C:/test/table.csv'), chooseSource: vi.fn(async () => 'C:/test/moved.gpkg'), chooseRaster: vi.fn(async () => raster.source.path), chooseRasterExport: vi.fn(async () => 'C:/test/export.tif'), chooseCsvExport: vi.fn(async () => 'C:/test/statistics.csv'), chooseExport: vi.fn(async () => 'C:/test/export.gpkg'), join: vi.fn(async (...parts) => parts.join('/')), diagnosticDirectory: vi.fn(async () => 'C:/test/cache'), onClose: vi.fn(async () => () => undefined), closeWindow: vi.fn(async () => undefined) };
   return { bridge, request };
 }
 
@@ -87,15 +87,17 @@ describe('raster workspace operations', () => {
     const { bridge, request } = fixture();
     render(<App bridge={bridge} />);
     await waitFor(() => expect(screen.getByRole('button', { name: '打开项目' }).hasAttribute('disabled')).toBe(false));
-    fireEvent.click(screen.getByRole('button', { name: '打开项目' }));
+    // Opening replaces the workspace session; flush its async state and mount
+    // effects before sampling, so the new-session reset cannot clear the click.
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '打开项目' })); });
     await waitFor(() => expect(screen.getByRole('button', { name: 'Sample map pixel' }).hasAttribute('disabled')).toBe(false));
     fireEvent.click(screen.getByRole('button', { name: 'Sample map pixel' }));
-    await waitFor(() => expect(request).toHaveBeenCalledWith('raster.sample', { path: project.projectPath, datasetId: raster.id, coordinate: [114, 27] }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith('raster.sample', { path: project.projectPath, datasetId: raster.id, coordinate: [114, 27] }, expect.any(AbortSignal)));
     expect(await screen.findByText('9007199254740993')).toBeTruthy();
     expect(request.mock.calls.some(([method]) => method.startsWith('vector.'))).toBe(false);
     expect(screen.queryByRole('region', { name: '属性表' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /^Boundary/ }));
-    await waitFor(() => expect(request).toHaveBeenCalledWith('vector.page', expect.objectContaining({ datasetId: vector.id })));
+    await waitFor(() => expect(request).toHaveBeenCalledWith('vector.page', expect.objectContaining({ datasetId: vector.id }), expect.any(AbortSignal)));
     expect(screen.queryByRole('region', { name: '像元信息' })).toBeNull();
   });
 
@@ -164,7 +166,7 @@ describe('raster response isolation', () => {
     expect(request).toHaveBeenCalledOnce();
     rerender({ enabled: true, path: 'C:/test/reopened/project.spa' });
     await waitFor(() => expect(result.current.result).toEqual(sampled));
-    expect(request).toHaveBeenLastCalledWith('raster.sample', { path: 'C:/test/reopened/project.spa', datasetId: raster.id, coordinate: [114, 27] });
+    expect(request).toHaveBeenLastCalledWith('raster.sample', { path: 'C:/test/reopened/project.spa', datasetId: raster.id, coordinate: [114, 27] }, expect.any(AbortSignal));
   });
 
   it('suppresses a pending sample failure after unmount', async () => {

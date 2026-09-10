@@ -2,9 +2,17 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { appCacheDir, dirname, join } from '@tauri-apps/api/path';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import type { AttributePage, Dataset, EngineError, EngineMethod, FeatureResult, MapLayer, ProbeReport, Project, RasterInspection, RasterRenderResult, RasterSampleResult, RuntimeInfo, SourceInspection, SourceStatus, TableInspection, Task, ViewportResult, Workspace } from '../../../shared/contracts';
+import type { AnalysisResultPage, AttributePage, Dataset, EngineError, EngineMethod, FeatureResult, MapLayer, ProbeReport, Project, RasterInspection, RasterRenderResult, RasterSampleResult, RuntimeInfo, SourceInspection, SourceStatus, TableInspection, Task, ViewportResult, Workspace } from '../../../shared/contracts';
+import { createRequestQueue } from './request-queue';
+import { retryQueryWarmup } from './query-warmup';
+
+const requests = createRequestQueue();
+const displayMethods = new Set<EngineMethod>(['vector.page', 'vector.viewport', 'vector.feature', 'table.page', 'raster.render', 'raster.sample', 'analysis.result']);
 
 interface EngineResults {
+  'analysis.run': Task;
+  'analysis.result': AnalysisResultPage;
+  'analysis.exportCsv': Task;
   'runtime.info': RuntimeInfo;
   'project.create': Project;
   'project.open': Project;
@@ -60,12 +68,16 @@ export function normalizeError(error: unknown): EngineError {
 export async function engineRequest<M extends EngineMethod>(
   method: M,
   params: Record<string, unknown> = {},
+  signal?: AbortSignal,
 ): Promise<EngineResults[M]> {
   if (!isTauri()) {
     throw { code: -32000, message: '浏览器模式下本地引擎不可用，请使用桌面应用。', data: { kind: 'NATIVE_UNAVAILABLE' } } satisfies EngineError;
   }
   try {
-    return await invoke<EngineResults[M]>('engine_request', { method, params });
+    return await retryQueryWarmup(() => requests.run(method === 'task.cancel' ? 'urgent' : displayMethods.has(method) ? 'display' : 'control', () => {
+      if (signal?.aborted) throw new DOMException('查询已取消', 'AbortError');
+      return invoke<EngineResults[M]>('engine_request', { method, params }).catch((cause) => { throw normalizeError(cause); });
+    }), signal);
   } catch (error) {
     throw normalizeError(error);
   }
@@ -81,7 +93,7 @@ export const desktop = {
   selectTableSource: () => open({ multiple: false, directory: false, title: '导入坐标表', filters: [{ name: '坐标表', extensions: ['csv', 'xlsx'] }] }),
   chooseRaster: () => open({ multiple: false, directory: false, title: '导入 GeoTIFF', filters: [{ name: 'GeoTIFF', extensions: ['tif', 'tiff'] }] }),
   chooseSource: (dataset: Dataset) => {
-    if (dataset.source.driver === 'TablePoints') return Promise.resolve(null);
+    if (['TablePoints', 'SpatialAnalysis'].includes(dataset.source.driver)) return Promise.resolve(null);
     if (['OpenFileGDB', 'FileGDB'].includes(dataset.source.driver)) return open({ multiple: false, directory: true, title: '重新定位来源 File Geodatabase (.gdb)' });
     const extensions = dataset.kind === 'raster' ? ['tif', 'tiff']
       : dataset.source.driver === 'CSV' ? ['csv']
@@ -91,6 +103,7 @@ export const desktop = {
     return open({ multiple: false, directory: false, title: '重新定位来源', filters: [{ name: dataset.source.driver, extensions }] });
   },
   chooseRasterExport: (name: string) => save({ title: '导出 GeoTIFF', defaultPath: `${name.replace(/[<>:"/\\|?*]/g, '_')}.tif`, filters: [{ name: 'GeoTIFF', extensions: ['tif', 'tiff'] }] }),
+  chooseCsvExport: (name: string) => save({ title: '导出分类统计 CSV', defaultPath: `${name.replace(/[<>:"/\\|?*]/g, '_')}.csv`, filters: [{ name: 'CSV', extensions: ['csv'] }] }),
   chooseExport: (name: string) => save({ title: '导出 GeoPackage', defaultPath: `${name.replace(/[<>:"/\\|?*]/g, '_')}.gpkg`, filters: [{ name: 'GeoPackage', extensions: ['gpkg'] }] }),
   join,
   diagnosticDirectory: async (projectPath?: string) => projectPath

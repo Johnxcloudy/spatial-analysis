@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type SetStateAction } from 'react';
-import { PROTOCOL_VERSION, type Dataset, type EngineError, type MapLayer, type ProbeReport, type Project, type RuntimeInfo, type SourceInspection, type TableOptions, type Task, type ViewState, type Workspace } from '../../../shared/contracts';
+import { PROTOCOL_VERSION, type AnalysisOptions, type Dataset, type EngineError, type MapLayer, type ProbeReport, type Project, type RuntimeInfo, type SourceInspection, type TableOptions, type Task, type ViewState, type Workspace } from '../../../shared/contracts';
 import { normalizeError, type DesktopBridge } from './bridge';
 import { draftFromProject, hasUnsavedChanges, validateDirectoryName, type ProjectDraft } from './project-state';
 
@@ -13,6 +13,7 @@ export function useWorkspace(bridge: DesktopBridge) {
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [sessionId, setSessionId] = useState(0);
+  const [pollRevision, setPollRevision] = useState(0);
   const [selectedSource, setSelectedSource] = useState<{ kind: 'layer' | 'table'; id: string } | null>(null);
   const selectedLayerId = selectedSource?.kind === 'layer' ? selectedSource.id : null;
   const selectedTableId = selectedSource?.kind === 'table' ? selectedSource.id : null;
@@ -102,6 +103,7 @@ export function useWorkspace(bridge: DesktopBridge) {
 
   const refreshWorkspace = useCallback(() => run('刷新工作区', async () => {
     await loadWorkspace(activeProject(), generation.current);
+    setPollRevision((value) => value + 1);
   }), [run, loadWorkspace, activeProject]);
 
   const acceptProject = useCallback(async (next: Project) => {
@@ -295,7 +297,7 @@ export function useWorkspace(bridge: DesktopBridge) {
   const relocateSource = (dataset: Dataset) => run('重新定位来源', async () => {
     const current = activeProject();
     if (activeTask) throw new Error('请等待当前任务完成。');
-    if (dataset.source.driver === 'TablePoints') throw new Error('派生点数据使用项目内的父表格。');
+    if (['TablePoints', 'SpatialAnalysis'].includes(dataset.source.driver)) throw new Error('派生数据使用项目内的输入快照。');
     const token = generation.current;
     const sourcePath = await bridge.chooseSource(dataset);
     if (!sourcePath || Array.isArray(sourcePath) || generation.current !== token) return;
@@ -312,14 +314,14 @@ export function useWorkspace(bridge: DesktopBridge) {
     setNotice('导入任务已开始');
   });
 
-  const inspectTable = useCallback((options: TableOptions) => {
+  const inspectTable = useCallback((options: TableOptions, signal?: AbortSignal) => {
     activeProject();
-    return bridge.request('table.inspect', { ...options });
+    return bridge.request('table.inspect', { ...options }, signal);
   }, [activeProject, bridge]);
 
-  const inspectRaster = useCallback((sourcePath: string) => {
+  const inspectRaster = useCallback((sourcePath: string, signal?: AbortSignal) => {
     activeProject();
-    return bridge.request('raster.inspect', { sourcePath });
+    return bridge.request('raster.inspect', { sourcePath }, signal);
   }, [activeProject, bridge]);
 
   const importRaster = (sourcePath: string) => run('开始导入栅格', async () => {
@@ -365,31 +367,64 @@ export function useWorkspace(bridge: DesktopBridge) {
     setNotice('导出任务已开始');
   });
 
+  const runAnalysis = (options: AnalysisOptions) => run('开始用地分析', async () => {
+    const current = activeProject();
+    if (activeTask) throw new Error('请等待当前任务完成。');
+    const token = generation.current;
+    const task = await bridge.request('analysis.run', { path: current.projectPath, ...options });
+    if (generation.current !== token || projectRef.current?.id !== current.id) return;
+    if (task.kind !== 'analysis') throw new Error('分析任务响应类型不匹配。');
+    rememberTask(task);
+    setNotice('分析任务已开始，可继续浏览地图或取消任务');
+  });
+
+  const exportAnalysisCsv = (datasetId: string, name: string) => run('导出分类统计', async () => {
+    const current = activeProject();
+    if (activeTask) throw new Error('请等待当前任务完成。');
+    const token = generation.current;
+    const destination = await bridge.chooseCsvExport(name);
+    if (!destination || generation.current !== token) return;
+    rememberTask(await bridge.request('analysis.exportCsv', { path: current.projectPath, datasetId, destination }));
+    setNotice('统计 CSV 导出任务已开始');
+  });
+
   useEffect(() => {
     if (!activeTask || !project || needsReopen || !runtime) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
+    let retries = 0;
     const token = generation.current;
     const poll = async () => {
       try {
         const next = await bridge.request('task.get', { path: project.projectPath, taskId: activeTask.id });
         if (cancelled || token !== generation.current) return;
         if (next.id !== activeTask.id || next.kind !== activeTask.kind) throw new Error('任务响应与当前任务不匹配。');
+        retries = 0;
         if (next.status === 'running') {
           rememberTask(next);
           timer = setTimeout(poll, 700);
         }
         else {
-          const completedNotice: Record<Task['kind'], string> = { import: '数据已导入', points: '点数据已生成', export: '数据已导出', save_as: '项目副本已创建', relocate: '来源位置已更新' };
+          const completedNotice: Record<Task['kind'], string> = { analysis: '用地分析已完成', import: '数据已导入', points: '点数据已生成', export: '数据已导出', save_as: '项目副本已创建', relocate: '来源位置已更新' };
           setNotice(next.status === 'completed' ? completedNotice[next.kind] : next.error || (next.status === 'cancelled' ? '任务已取消' : '任务未完成'));
           rememberTask(next);
           await loadWorkspace(project, token, next.status === 'completed' && next.kind !== 'export' ? next.datasetId : null);
         }
-      } catch (cause) { if (!cancelled && token === generation.current) handleFailure(cause); }
+      } catch (cause) {
+        if (cancelled || token !== generation.current) return;
+        const kind = normalizeError(cause).data?.kind;
+        if (['REQUEST_QUEUE_FULL', 'REQUEST_QUEUE_PREEMPTED', 'query_unready', 'query_timeout'].includes(kind ?? '') && retries < 3) {
+          retries += 1;
+          timer = setTimeout(poll, 700);
+        } else {
+          handleFailure(cause);
+          setNotice('任务状态暂不可用，请刷新工作区重试；也可取消当前任务。');
+        }
+      }
     };
     timer = setTimeout(poll, 300);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [activeTask?.id, project?.id, needsReopen, runtime, bridge, rememberTask, loadWorkspace, handleFailure]);
+  }, [activeTask?.id, project?.id, needsReopen, runtime, bridge, rememberTask, loadWorkspace, handleFailure, pollRevision]);
 
   // Only a copy initiated in this live session can trigger a project transition.
   useEffect(() => {
@@ -446,7 +481,7 @@ export function useWorkspace(bridge: DesktopBridge) {
     await loadWorkspace(current, generation.current);
   });
 
-  return { project, draft, setDraft, setView, sessionId, runtime, workspace, selectedLayerId, selectedTableId, setSelectedLayerId, setSelectedTableId, refreshWorkspace, activeTask, copying, saveAs, relocateSource, inspectSource, inspectTable, inspectRaster, importVector, importTable, importRaster, generatePoints, exportVector, exportTable, exportRaster, cancelTask, updateLayer, reorderLayers, removeLayer, handleFailure, report, busy, error, notice, dirty, native, needsReopen, newProject, setNewProject, pending, requestAction, resolvePending, create, save, connect, diagnose };
+  return { project, draft, setDraft, setView, sessionId, runtime, workspace, selectedLayerId, selectedTableId, setSelectedLayerId, setSelectedTableId, refreshWorkspace, activeTask, copying, saveAs, relocateSource, inspectSource, inspectTable, inspectRaster, importVector, importTable, importRaster, generatePoints, exportVector, exportTable, exportRaster, runAnalysis, exportAnalysisCsv, cancelTask, updateLayer, reorderLayers, removeLayer, handleFailure, report, busy, error, notice, dirty, native, needsReopen, newProject, setNewProject, pending, requestAction, resolvePending, create, save, connect, diagnose };
 }
 
 export type WorkspaceState = ReturnType<typeof useWorkspace>;

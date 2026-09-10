@@ -28,6 +28,26 @@ async fn wait_for_task(
     Err(EngineError::local("SMOKE_TASK_TIMEOUT", task.to_string()))
 }
 
+async fn wait_for_query(
+    app: &AppHandle,
+    engine: &EngineManager,
+    method: &str,
+    params: Value,
+) -> Result<Value, EngineError> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        match engine.request(app, method, params.clone()).await {
+            Err(error)
+                if error.data["kind"] == "query_unready"
+                    && tokio::time::Instant::now() < deadline =>
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            result => return result,
+        }
+    }
+}
+
 #[tauri::command]
 async fn engine_request(
     app: AppHandle,
@@ -41,7 +61,7 @@ async fn engine_request(
 async fn smoke_test(app: &AppHandle, directory: &std::path::Path) -> Result<Value, EngineError> {
     let engine = app.state::<EngineManager>();
     let runtime = engine.request(app, "runtime.info", json!({})).await?;
-    if runtime["protocolVersion"] != 5 || runtime["engineVersion"] != "0.5.0" {
+    if runtime["protocolVersion"] != 6 || runtime["engineVersion"] != "0.6.0" {
         return Err(EngineError::local(
             "SMOKE_VERSION_MISMATCH",
             runtime.to_string(),
@@ -83,13 +103,13 @@ async fn smoke_test(app: &AppHandle, directory: &std::path::Path) -> Result<Valu
             report.to_string(),
         ));
     }
-    let source = engine
-        .request(
-            app,
-            "source.inspect",
-            json!({"sourcePath":report["geopackagePath"],"encoding":null}),
-        )
-        .await?;
+    let source = wait_for_query(
+        app,
+        &engine,
+        "source.inspect",
+        json!({"sourcePath":report["geopackagePath"],"encoding":null}),
+    )
+    .await?;
     let import_task = engine
         .request(
             app,
@@ -389,7 +409,7 @@ async fn smoke_test(app: &AppHandle, directory: &std::path::Path) -> Result<Valu
         .request(app, "workspace.get", json!({"path":copied["projectPath"]}))
         .await?;
     if copied["id"] == created["id"]
-        || copied["schemaVersion"] != 5
+        || copied["schemaVersion"] != 6
         || copied["description"] != "Unsaved form copied without saving original"
         || copied_workspace["datasets"] != restored["datasets"]
         || copied_workspace["layers"] != restored["layers"]
@@ -441,6 +461,46 @@ async fn smoke_test(app: &AppHandle, directory: &std::path::Path) -> Result<Valu
             original_after_copy.to_string(),
         ));
     }
+    let analysis_task = engine
+        .request(
+            app,
+            "analysis.run",
+            json!({
+                "path":path,"operation":"clip","name":"Native land area",
+                "inputDatasetId":dataset["id"],"overlayDatasetId":dataset["id"],
+                "inputClassField":"name","overlayClassField":null,
+                "classificationStandard":"Synthetic native smoke v1","analysisCrs":"EPSG:4547",
+                "crsReason":"Synthetic rectangle lies in the selected CGCS2000 projection zone"
+            }),
+        )
+        .await?;
+    let analysis_task = wait_for_task(app, &engine, &path, analysis_task).await?;
+    let analysis_result = engine
+        .request(
+            app,
+            "analysis.result",
+            json!({
+                "path":path,"datasetId":analysis_task["datasetId"],"offset":0,"limit":50
+            }),
+        )
+        .await?;
+    if analysis_result["record"]["outputFeatureCount"] != 1
+        || (analysis_result["record"]["recordAreaM2"]
+            .as_f64()
+            .unwrap_or(-1.0)
+            - 10000.0)
+            .abs()
+            > 0.000001
+    {
+        return Err(EngineError::local(
+            "SMOKE_ANALYSIS_MISMATCH",
+            analysis_result.to_string(),
+        ));
+    }
+    let analysis_export = engine.request(app, "analysis.exportCsv", json!({
+        "path":path,"datasetId":analysis_task["datasetId"],"destination":directory.join("analysis.csv")
+    })).await?;
+    let analysis_export = wait_for_task(app, &engine, &path, analysis_export).await?;
     engine.request(app, "project.close", json!({})).await?;
     Ok(
         json!({"ok":true,"runtime":runtime,"created":created,"reopened":reopened,"diagnostics":report,
@@ -449,7 +509,8 @@ async fn smoke_test(app: &AppHandle, directory: &std::path::Path) -> Result<Valu
             "pointViewport":point_view,"tableExport":table_export,"rasterSource":raster_source,
             "rasterSample":raster_sample,"rasterRender":{"width":raster_image["width"],"height":raster_image["height"],"mimeType":raster_image["mimeType"]},
             "rasterExport":raster_export,"sourceLocation":source_location,"relocationTask":relocation_task,
-            "copyTask":copy_task,"copiedProject":copied,"copiedParent":copied_parent}),
+            "copyTask":copy_task,"copiedProject":copied,"copiedParent":copied_parent,
+            "analysisTask":analysis_task,"analysisResult":analysis_result,"analysisExport":analysis_export}),
     )
 }
 

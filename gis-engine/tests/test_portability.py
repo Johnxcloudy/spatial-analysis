@@ -440,7 +440,7 @@ def test_schema_four_migration_preserves_registry_json_history_and_bytes(tmp_pat
         raw_json = connection.execute("SELECT dataset_json FROM datasets").fetchall()
     original_bytes = {d["relativePath"]: (path.parent / d["relativePath"]).read_bytes() for d in original_workspace["datasets"]}
     reopened = projects.open({"path": str(path)})
-    assert reopened["schemaVersion"] == 5
+    assert reopened["schemaVersion"] == 6
     assert workspace.get({"path": str(path)}) == original_workspace
     with sqlite3.connect(path) as connection:
         assert connection.execute("SELECT dataset_json FROM datasets").fetchall() == raw_json

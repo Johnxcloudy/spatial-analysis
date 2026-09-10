@@ -1,8 +1,12 @@
 # Spatial Analysis Desktop
 
-面向土地利用、用地叠加与面积统计的 Windows 本地 GIS 工作站。当前版本为 **0.5.0 / Phase 1D：项目另存与工作区整合**，已实现项目另存、来源重新定位和混合数据工作区支持，本机分发验收及对应功能提交的 Windows CI 均通过，代码已推送。范围见 [Phase 1D](docs/phase-1d.md)，实际证据与限制见 [Phase 1D 验证记录](docs/verification-phase-1d.md) 和 [执行说明](执行说明.md)；0.4.0 历史证据保留在 [Phase 1C 验证记录](docs/verification-phase-1c.md)。
+面向土地利用、用地叠加与面积统计的 Windows 本地 GIS 工作站。当前开发版本为 **0.6.0 / Phase 2：土地叠加与分类面积**，使用完整托管快照执行裁剪/相交，目标规模为每层 50 万图斑。源码压力工作流已执行，最终冻结、原生响应性、安装包与 CI 验收仍在进行；准确状态见 [执行说明](执行说明.md) 与 [Phase 2 范围](docs/phase-2.md)。历史交付证据保留在 [Phase 1D 验证记录](docs/verification-phase-1d.md)。
 
 ## 当前范围
+
+- “用地分析”选择两个面数据集、字符串地类字段和分类标准版本，填写适用的二维分析投影与理由，生成完整几何、分类统计和计算记录。
+- 用地同层正面积重叠/重复、无效几何会阻止统计；裁剪研究区按并集处理，不隐式修复、去重、吸附或删除碎面。
+- 成果 GeoPackage 包含几何、统计和输入 ID/版本/CRS/算法追溯记录；统计 CSV 保留分类文本并用独立列区分 NULL。提供占研究区和占有效覆盖面积两种比例。
 
 - 导入 GeoPackage、Shapefile、GeoJSON 和 File Geodatabase 的普通二维要素，选择源数据层与字符编码。
 - 导入 CSV/XLSX 为独立表格，选择编码、分隔符、工作表和表头行；明确 X/Y 字段与来源 CRS 后生成点图层，错误行保留并注明原因。
@@ -13,9 +17,9 @@
 - 导出新的 GeoPackage；项目创建、保存、关闭、重开及旧版项目迁移备份。
 - 项目另存为新目录，携带完整托管快照、图层、来源位置记录和已结束的任务历史；验证完成后打开副本。
 - 查看来源存在/缺失/不可访问状态；显式重新定位时核对来源身份，并追加独立位置记录。
-- 导入、导出、坐标转点、项目另存与来源定位任务进度和取消，日志、运行环境信息和独立 GIS 诊断。
+- 导入、导出、坐标转点、分析、项目另存与来源定位任务进度和取消，日志、运行环境信息和独立 GIS 诊断。
 
-**尚不提供正式叠加、裁剪、分类面积或占比计算。** 诊断中的已知面积矩形、相交和投影往返仅用于核对引擎，不是项目分析结果，也不证明真实数据的测绘精度。
+“用地分析”的结果来自项目完整快照，按保存的投影、输入版本和面积口径计算。独立诊断中的已知矩形、相交和投影往返仅用于核对引擎，不是项目分析结果；两者均不自动证明真实数据的测绘精度。
 
 ## 使用
 
@@ -36,7 +40,7 @@
 
 CSV 按文本保留，包括前导零、空字符串与文字 NULL。XLSX 主表保存规范化文本/NULL，公式保留原文且不执行；单元格类型、数字格式与完整表头映射保存到同一 GeoPackage 的辅助表中。数字显示格式不应用到主表文本，工作簿版式、富文本、公式缓存和原始 XML 数字写法不作为保真范围。不支持 XLS/XLSM。
 
-每个项目同时执行一个导入、导出、坐标转点、另存或来源定位任务；只显示真实阶段和可用计数。另存期间保留原项目并锁定冲突操作，可取消复制；未完成的副本不会被当作成功项目打开。关闭或切换项目会结束活动任务，中断任务不自动恢复。引擎连接故障后需重新打开项目，未保存的表单内容会暂时保留。
+每个项目同时执行一个导入、导出、坐标转点、分析、另存或来源定位任务；只显示真实阶段和可用计数。另存期间保留原项目并锁定冲突操作，可取消复制；未完成的副本不会被当作成功项目打开。关闭或切换项目会结束活动计算，计算本身不自动重跑；已经写完但未登记的成果会在重开时按发布日志核对，大文件核对可取消并留待下次重开。引擎连接故障后需重新打开项目，未保存的表单内容会暂时保留。
 
 栅格使用“导入栅格”，选择自包含 `.tif` 或 `.tiff`。灰度/RGB 设置按波段原始值选择显示范围；抽样最小/最大值只用于显示建议。点击地图可查询原始像元及 scale/offset 后的值，NoData 和掩膜不当作零。像元行列从 0 开始。图层样式立即保存，导出复制完整原始 GeoTIFF，不输出屏幕预览图。
 
@@ -46,16 +50,21 @@ GDB 支持范围是普通要素类；报告中标记“未读取”的高级元�
 
 ## 当前限制
 
-以下是 [Phase 1A](docs/phase-1a.md)、[Phase 1B](docs/phase-1b.md)、[Phase 1C](docs/phase-1c.md) 与 [Phase 1D](docs/phase-1d.md) 的保护上限，不是大数据性能承诺：
+以下为累计到 [Phase 2](docs/phase-2.md) 的保护上限；实际压力测试与环境见 [验证记录](docs/verification-phase-2.md)：
 
 | 项目 | 上限 |
 | --- | --- |
-| 单次导入 | 100,000 个要素、2,000,000 个顶点、256 个字段 |
+| 单次矢量导入 | 500,000 个要素、10,000,000 个顶点、单几何 100,000 顶点、512 MiB 快照、256 个字段 |
 | 数据源检查 | 512 个源数据层 |
 | 每个项目 | 64 个托管数据集 |
 | 元数据 | 每个数据集 256 KiB；工作区响应 6 MiB |
 | 属性查询 | 默认每页 200 条，最多 500 条 |
 | 地图查询 | 每次最多 2,000 个要素、100,000 个显示顶点 |
+| 交互地图聚合 | 矢量和栅格合计最多显示 8 个图层；矢量合计 2,000 个要素 / 40,000 顶点；省略有明确提示 |
+| 土地分析 | 累计 5,000,000 候选对、最多 500,000 成果面 / 10,000,000 顶点 / 512 MiB、10,000 个分类组合 |
+| 研究区裁剪边界 | 10,000 个面、1,000,000 顶点；超限拒绝并集 |
+| 任务进程保护 | 900 秒、进程树 2 GiB；独立监控不依赖轮询，协作取消 2 秒后终止 |
+| 查询进程保护 | 每操作 2 秒、1 GiB；冷启动单独预热，超时回收查询进程并保留项目 |
 | 单次属性或地图查询 | 序列化响应最多 2 MiB |
 | 表格 | 100,000 数据行、2,000,000 单元格；主表总字段最多 256 |
 | 表格列数 | 最多 254 个来源列；转点最多 252 个来源列，另留内部 ID 和状态字段 |
@@ -68,7 +77,9 @@ GDB 支持范围是普通要素类；报告中标记“未读取”的高级元�
 
 超限会返回错误或明确的截断提示。地图上的部分显示不代表数据集已完整显示，显示限制不改变托管快照。地图选中的要素若不在当前属性页，会在表格上方显示该记录。
 
-栅格导出沿用暂存副本和目标目录待发布副本流程，两个位置均需容纳一份完整文件。64 位整数像元原值以字符串返回；int64/uint64 波段中超出 JavaScript 安全整数范围的 NoData 标签拒绝导入，详见 Phase 1C 范围。正式土地叠加和面积统计属于后续 Phase 2。
+栅格导出沿用暂存副本和目标目录待发布副本流程，两个位置均需容纳一份完整文件。64 位整数像元原值以字符串返回；int64/uint64 波段中超出 JavaScript 安全整数范围的 NoData 标签拒绝导入，详见 Phase 1C 范围。正式面积使用指定投影下的平面几何面积，不代表台账面积或测绘精度；未知 CRS、Web Mercator、三维/复合 CRS、范围不适合及缺失转换格网均被拒绝。
+
+50 万图斑是有几何复杂度、候选量和内存边界的验收规模。简单图斑成功不保证任意 50 万复杂图斑都可计算；超预算会明确失败，保留输入和已有成果。显示截断不改变正式计算范围。CSV 请按文本列导入表格软件，避免其自动去除前导零；应用不执行分类文字中的表达式。
 
 历史 Shapefile 的组成文件若使用混合大小写基名，保持各文件原有名称与大小写、仅移动目录时可以重新定位；整组改名后可能无法匹配旧身份。旧版来源元数据没有保存每个组成文件的原始名称大小写，不能从已有指纹还原，程序不会猜测或绕过核对。
 
@@ -76,7 +87,7 @@ CART-00 制图草案和独立渲染探针已完成，验证了完整合成样本
 
 ## 安装与开发
 
-Windows x64 安装器使用 NSIS，包含 Python/GDAL 引擎和 WebView2 离线安装组件；安装版无需另外安装 Python。0.5.0 的本机临时安装、安装后运行和卸载已验收，对应功能提交的 Windows CI 通过。安装包尚未签名，独立 Windows 10/11、离线环境和真实规划数据验收的进度见 [当前验证记录](docs/verification-phase-1d.md)。
+Windows x64 安装器使用 NSIS，包含 Python/GDAL 引擎和 WebView2 离线安装组件；安装版无需另外安装 Python。0.6.0 的本机临时安装、安装后分析运行和卸载已验收；完整压力、发布版交互和 CI 状态见 [当前验证记录](docs/verification-phase-2.md)。安装包尚未签名，独立 Windows 10/11、离线环境和真实规划数据仍待验收。
 
 开发环境需要 Node.js 24、Rust 1.98 或以上、Visual Studio C++ Build Tools、Windows SDK、WebView2 和 uv。冻结引擎验证脚本需要 PowerShell 7。Python 3.12 及 GIS 依赖由 uv 安装到 `gis-engine/.venv`。
 
@@ -117,7 +128,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1
 
 安装器输出到 apps/desktop/src-tauri/target/release/bundle/nsis/。构建包含 PyInstaller 引擎和 WebView2 离线安装组件，首次构建会下载较多依赖。安装包尚未签名，不等于正式生产发布。
 
-实际测试、原生工作流、安装包和校验和记录见 [Phase 1D 验证记录](docs/verification-phase-1d.md)，未完成项以记录为准。历史 [Phase 1C](docs/verification-phase-1c.md)、[Phase 1B](docs/verification-phase-1b.md)、[Phase 1A](docs/verification-phase-1a.md) 与 [Phase 0](docs/verification.md) 记录保留，不用于替代当前版本验收。
+实际测试、原生工作流、安装包和校验和记录见 [Phase 2 验证记录](docs/verification-phase-2.md)，未完成项以记录为准。历史 [Phase 1D](docs/verification-phase-1d.md)、[Phase 1C](docs/verification-phase-1c.md)、[Phase 1B](docs/verification-phase-1b.md)、[Phase 1A](docs/verification-phase-1a.md) 与 [Phase 0](docs/verification.md) 记录保留，不用于替代当前版本验收。
 
 生成真实 GDAL 驱动写出的合成样本，并验证开发引擎的四类格式导入、查询、导出和项目恢复：
 
@@ -160,7 +171,7 @@ uv run --project gis-engine --frozen python scripts/verify-portability.py --outp
 uv run --project gis-engine --frozen python scripts/verify-portability.py --executable $engine --output .artifacts/portability-frozen-new
 ```
 
-输出目录须不存在，结果写入 `portability-verification.json`。`scripts/verify-migration.py --source-project <旧版项目.spa> --output <新目录>` 复制 schema 2/3/4 项目后检查升级到 schema 5 和迁移备份，不直接升级提供的原项目；应用也支持打开 schema 1 项目后先备份再迁移。
+输出目录须不存在，结果写入 `portability-verification.json`。`scripts/verify-migration.py --source-project <旧版项目.spa> --output <新目录>` 复制 schema 2/3/4/5 项目后检查升级到 schema 6 和迁移备份，不直接升级提供的原项目；应用也支持打开 schema 1 项目后先备份再迁移。
 
 桌面可执行文件支持 `--smoke-test <输出目录>`，用于验证宿主调用、项目保存重开、GIS 诊断、矢量导入、表格转点、真实栅格导入/渲染响应/查询/导出及项目另存/来源状态；此模式生成 native-smoke.json 后退出。它不操作 React/OpenLayers 界面。
 
@@ -171,6 +182,21 @@ uv run --project gis-engine --frozen python scripts/verify-portability.py --exec
 ```powershell
 node scripts/verify-portability-ui.mjs --fixtures .artifacts/portability-source-new/portability-verification.json --cdp http://127.0.0.1:9224
 ```
+
+土地分析压力验收使用完整合成快照、预设解析面积和资源门槛；完整运行需要数十分钟，输出目录必须是新目录：
+
+```powershell
+uv run --project gis-engine --frozen python scripts/verify-analysis.py --output .artifacts/analysis-source-new --counts 1000 10000 100000 250000 500000
+uv run --project gis-engine --frozen python scripts/verify-analysis.py --executable $engine --output .artifacts/analysis-frozen-new --counts 1000 10000 100000 250000 500000
+uv run --project gis-engine --frozen python scripts/verify-analysis-guards.py --executable $engine --output .artifacts/analysis-guards-new
+```
+
+每级核对导入、末页、取消后新任务、完整分析/统计、GPKG/CSV导出、重开及另存追溯。
+guards 单独验证复杂几何成功、真实候选预算和单面顶点超限拒绝、随后小任务恢复。
+`scripts/verify-analysis-ui.mjs --fixtures <成功的report.json> --cdp <本机CDP地址>`
+测量真实桌面的交互、事件循环、任务状态和取消；加 `--packaged --complete-large`
+用于发布版及完整大任务。仅替换文件选择器，原生GIS调用保持真实；两种RPC测量
+层级的差别见 [验收记录](docs/verification-phase-2.md)。
 
 独立制图探针的隔离依赖、源码/冻结检查和资产替换负例命令见 [CART-00 探针说明](scripts/cartography-probe/README.md)。其依赖未加入产品引擎，实验输出不能视作已交付制图功能。
 
@@ -187,7 +213,7 @@ scripts/                 引擎打包、安装构建和验证
 docs/                    方案、数据规范、架构与验收记录
 ```
 
-项目入口为 `project.spa`（SQLite 元数据），托管矢量和表格使用真正的 GeoPackage，栅格使用原生 GeoTIFF，缓存与原始数据分开管理。应用为 0.5.0，公开协议和项目 schema 为 v5，内部 worker 协议为 v4；打开 schema 1-4 项目时先备份，再通过事务迁移到 v5，保留历史数据集 JSON 和托管快照字节。不要将真实项目、缓存和诊断产物提交到代码仓库。
+项目入口为 `project.spa`（SQLite 元数据），托管矢量和表格使用真正的 GeoPackage，栅格使用原生 GeoTIFF，缓存与原始数据分开管理。应用为 0.6.0，公开协议和项目 schema 为 v6，内部 worker 协议为 v5；打开 schema 1-5 项目时先备份，再通过事务迁移到 v6，保留历史数据集 JSON 和托管快照字节。不要将真实项目、缓存和诊断产物提交到代码仓库。
 
 ## 文档
 
